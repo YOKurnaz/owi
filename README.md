@@ -9,6 +9,8 @@ and its **MCP server** (`ollaya mcp --http`).
 - API (same port): everything the UI does is a `GET/POST /api/*`
   call, so scripts and agents can drive it too.
 
+![OWI — Decide tab with live metrics, model policy and answers](docs/screenshot.png)
+
 ## Run (IPG, bare metal for now)
 
 ```bash
