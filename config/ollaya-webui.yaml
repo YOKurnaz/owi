@@ -1,0 +1,11 @@
+# Ollaya Web UI — runtime config (lowest priority after sqlite settings > env).
+# Priority: settings saved in the web UI (sqlite) > OLLAYA_BASE_URL / OWI_DEFAULT_MODEL /
+#           OWI_MAX_LOADED_MODELS env > this file > built-in defaults.
+ollaya_base_url: http://127.0.0.1:11435
+mcp_addr: 127.0.0.1:11436
+# Model that stays loaded (keep_alive -1); every other model unloads after use.
+default_model: laya:latest
+# Max models loaded at once (default model is never evicted).
+max_loaded_models: 2
+# Background Ollaya health probe interval (seconds, 20-600).
+health_interval_s: 60

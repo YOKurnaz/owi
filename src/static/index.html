@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>OWI — Ollaya Web Interface</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+<link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+<header>
+  <div class="title">
+    <h1>🧠 OWI <span class="muted">· Ollaya Web Interface</span></h1>
+    <div class="sub">Decide, manage models, control MCP — no curl · every call logged to sqlite · OWI itself is a webservice</div>
+  </div>
+  <div class="meta">
+    <span id="health-badge" class="badge">checking…</span>
+    <span id="health-lat" class="muted"></span>
+    <span id="mcp-badge" class="badge">mcp …</span>
+    <button id="btn-health" onclick="checkHealth()">Check</button>
+  </div>
+</header>
+
+<section class="settings">
+  <label>Ollaya <input id="ollaya-url" spellcheck="false" placeholder="http://127.0.0.1:11435"/></label>
+  <label>MCP <input id="mcp-addr" class="short" spellcheck="false" placeholder="127.0.0.1:11436"/></label>
+  <label>API key <input id="api-key" class="short" type="password" spellcheck="false" placeholder="(none)"/></label>
+  <button onclick="saveSettings()">Save</button>
+  <span id="settings-msg" class="muted"></span>
+  <span class="muted right">default <code id="policy-default">…</code> · max <code id="policy-max">…</code> · OWI :11524 · <a href="/api/policy" target="_blank">/api/policy</a></span>
+</section>
+
+<nav class="tabs" id="tabs">
+  <button data-tab="decide" class="on" onclick="showTab('decide')">Decide</button>
+  <button data-tab="models" onclick="showTab('models')">Models</button>
+  <button data-tab="mcp" onclick="showTab('mcp')">MCP</button>
+  <button data-tab="perf" onclick="showTab('perf')">Performance</button>
+  <button data-tab="log" onclick="showTab('log')">Log</button>
+  <button data-tab="api" onclick="showTab('api')">API</button>
+</nav>
+
+<section class="cards" id="metrics-cards">
+  <div class="card"><div class="k">Requests</div><div id="m-req" class="v">—</div><div id="m-24" class="bar-sub">—</div></div>
+  <div class="card"><div class="k">Success</div><div id="m-ok" class="v">—</div><div id="m-rate" class="bar-sub">—</div></div>
+  <div class="card"><div class="k">Avg (load/eval)</div><div id="m-avg" class="v">—</div><div id="m-minmax" class="bar-sub">—</div></div>
+  <div class="card"><div class="k">p50 / p95</div><div id="m-pct" class="v">—</div><div id="m-max" class="bar-sub">—</div></div>
+  <div class="card"><div class="k">Tokens in/out</div><div id="m-tok" class="v">—</div><div id="m-last" class="bar-sub">—</div></div>
+  <div class="card"><div class="k">Ollaya 24h</div><div id="m-ohev" class="v">—</div><div id="m-olat" class="bar-sub">—</div></div>
+  <div class="card"><div class="k">Loaded now</div><div id="m-loaded" class="v">—</div><div id="m-mcpup" class="bar-sub">—</div></div>
+</section>
+
+<!-- ============ DECIDE ============ -->
+<div id="tab-decide">
+<main class="grid">
+  <section class="panel">
+    <h2>Decide <span class="sub">state + questions → POST /api/decide</span></h2>
+    <div class="row">
+      <select id="model" title="model"></select>
+      <button onclick="refreshModels()" title="reload model list">⟳</button>
+      <select id="preset" onchange="loadPreset()">
+        <option value="triage">triage</option>
+        <option value="email">email</option>
+        <option value="guard">guard</option>
+        <option value="moderation">moderation</option>
+        <option value="router">router</option>
+        <option value="agent">agent</option>
+        <option value="custom">custom (blank)</option>
+      </select>
+      <select id="keepalive" title="keep_alive — auto follows policy: default model stays loaded, others unload">
+        <option value="">keepalive: auto (policy)</option>
+        <option value="0">keepalive: unload after</option>
+        <option value="10m">keepalive: 10m</option>
+        <option value="-1">keepalive: forever</option>
+        <option value="default">keepalive: ollaya default (5m)</option>
+      </select>
+      <span class="sub" id="ka-hint"></span>
+      <label class="chk"><input type="checkbox" id="extras-laya"/> laya extras</label>
+    </div>
+    <div class="row">
+      <button onclick="prettify()">Prettify</button>
+      <button onclick="loadModel(true)">⬆ Load model</button>
+      <button class="primary" id="btn-send" onclick="send()">▶ Decide</button>
+    </div>
+    <label>state (string, object or array)
+      <textarea id="state" spellcheck="false" rows="6"></textarea>
+    </label>
+    <label>questions (object) — question_id → {type: choice|score|noul, instructions, criteria} <span class="sub">(from preset; edit freely)</span>
+      <textarea id="questions" spellcheck="false" rows="14"></textarea>
+    </label>
+    <div id="send-err" class="err hidden"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Answers <span class="sub" id="resp-meta">no request yet</span></h2>
+    <div id="perf" class="perf hidden">
+      <div><span class="k">Status</span><span id="p-status" class="v">—</span></div>
+      <div><span class="k">Total</span><span id="p-lat" class="v">—</span></div>
+      <div><span class="k">Load / eval</span><span id="p-le" class="v">—</span></div>
+      <div><span class="k">Tokens</span><span id="p-tok" class="v">—</span></div>
+      <div><span class="k">Answered by</span><span id="p-by" class="v small">—</span></div>
+      <div><span class="k">Route</span><span id="p-route" class="v small">—</span></div>
+    </div>
+    <div id="answers"></div>
+    <h3>Raw JSON</h3>
+    <pre id="raw">—</pre>
+  </section>
+</main>
+</div>
+
+<!-- ============ MODELS ============ -->
+<div id="tab-models" class="hidden">
+<section class="grid2">
+  <div class="panel">
+    <h2>Local models <span class="sub">GET /api/tags</span> <button onclick="refreshModels()">⟳ Reload</button></h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Size</th><th>Format</th><th>Params</th><th>Modified</th><th></th></tr></thead>
+      <tbody id="models-body"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+    </table></div>
+    <h3>Pull a model <span class="sub">POST /api/models/pull</span></h3>
+    <div class="row">
+      <input id="pull-name" spellcheck="false" placeholder="laya  ·  decider  ·  winnow:e4b"/>
+      <button onclick="pullModel()">⬇ Pull</button>
+      <span id="pull-msg" class="muted"></span>
+    </div>
+    <h3>Copy <span class="sub">POST /api/models/copy</span></h3>
+    <div class="row">
+      <input id="cp-src" spellcheck="false" placeholder="source"/>
+      <input id="cp-dst" spellcheck="false" placeholder="destination"/>
+      <button onclick="copyModel()">⧉ Copy</button>
+      <span id="cp-msg" class="muted"></span>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Loaded in memory <span class="sub">GET /api/ps · policy: default <code id="running-default">…</code>, max <code id="running-max">…</code></span> <button onclick="refreshRunning()">⟳ Reload</button></h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Device</th><th>Mem</th><th>Expires</th><th></th></tr></thead>
+      <tbody id="running-body"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+    </table></div>
+    <h3>Default model <span class="sub">always kept loaded · at most N loaded total</span></h3>
+    <div class="row">
+      <select id="default-model" title="default model"></select>
+      <input id="max-loaded" spellcheck="false" placeholder="max (e.g. 2)" style="max-width:110px"/>
+      <button class="primary" onclick="savePolicy()">Set default</button>
+      <button onclick="ensureDefault()">⬆ Ensure loaded</button>
+      <button onclick="enforcePolicy()">Enforce max</button>
+      <span id="policy-msg" class="muted"></span>
+    </div>
+    <h3>Model detail <span class="sub">POST /api/models/show</span></h3>
+    <div class="row">
+      <input id="show-name" spellcheck="false" placeholder="model name"/>
+      <button onclick="showModel()">Show</button>
+    </div>
+    <pre id="show-pre" class="out">—</pre>
+    <h3>Create from base <span class="sub">POST /api/models/create — bakes questions/calibration/precision into a name</span></h3>
+    <div class="row">
+      <input id="cr-name" spellcheck="false" placeholder="new name (e.g. triage)"/>
+      <input id="cr-from" spellcheck="false" placeholder="from (e.g. laya:en)"/>
+      <input id="cr-precision" spellcheck="false" placeholder="precision fp16|fp32 (opt)"/>
+    </div>
+    <label>questions JSON (optional — object like the Decide tab)
+      <textarea id="cr-questions" spellcheck="false" rows="4" placeholder='{"dept": {"type": "choice", ...}}'></textarea>
+    </label>
+    <div class="row">
+      <input id="cr-desc" spellcheck="false" placeholder="description (optional)"/>
+      <button class="primary" onclick="createModel()">＋ Create</button>
+      <span id="cr-msg" class="muted"></span>
+    </div>
+  </div>
+</section>
+</div>
+
+<!-- ============ MCP ============ -->
+<div id="tab-mcp" class="hidden">
+<section class="grid2">
+  <div class="panel">
+    <h2>MCP server <span class="sub">ollaya mcp --http</span></h2>
+    <div id="mcp-info" class="muted">Loading…</div>
+    <div class="row" style="margin-top:8px">
+      <button class="primary" id="btn-mcp-start" onclick="mcpStart()">▶ Start MCP</button>
+      <button class="danger" id="btn-mcp-stop" onclick="mcpStop()">■ Stop MCP</button>
+      <button onclick="mcpHealth()">Probe</button>
+    </div>
+    <div id="mcp-msg" class="muted"></div>
+    <h3>Config for agents <span class="sub">copy into your MCP client</span></h3>
+    <pre id="mcp-snippet" class="out">—</pre>
+  </div>
+  <div class="panel">
+    <h2>Call a tool <span class="sub">POST /api/mcp/call</span></h2>
+    <div class="row">
+      <select id="mcp-tool" onchange="mcpToolChanged()">
+        <option value="decide">decide</option>
+        <option value="list_models">list_models</option>
+        <option value="show_model">show_model</option>
+        <option value="pull_model">pull_model</option>
+      </select>
+      <button class="primary" onclick="mcpCall()">▶ Call</button>
+    </div>
+    <label>arguments (JSON object)
+      <textarea id="mcp-args" spellcheck="false" rows="8"></textarea>
+    </label>
+    <div id="mcp-call-err" class="err hidden"></div>
+    <h3>Result</h3>
+    <div id="mcp-answers"></div>
+    <pre id="mcp-raw" class="out">—</pre>
+    <h3>Resources <span class="sub">ollaya://…</span> <button onclick="mcpResources()">⟳ List</button></h3>
+    <div class="row">
+      <select id="mcp-res"></select>
+      <button onclick="mcpRead()">Read</button>
+    </div>
+    <pre id="mcp-res-pre" class="out">—</pre>
+  </div>
+</section>
+</div>
+
+<!-- ============ PERF ============ -->
+<div id="tab-perf" class="hidden">
+<section class="grid2">
+  <div class="panel">
+    <h2>Per model <span class="sub">avg latency · avg eval · tokens</span></h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Model</th><th>Calls</th><th>Avg ms</th><th>Avg eval</th><th>Tokens</th><th>OK</th></tr></thead>
+      <tbody id="permodel-body"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+    </table></div>
+    <h2>Per preset</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Preset</th><th>Calls</th><th>Avg ms</th><th>OK</th></tr></thead>
+      <tbody id="preset-body"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+    </table></div>
+    <h2>Per day</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Day</th><th>Calls</th><th>Avg ms</th></tr></thead>
+      <tbody id="day-body"><tr><td colspan="3" class="muted">Loading…</td></tr></tbody>
+    </table></div>
+  </div>
+  <div class="panel">
+    <h2>Health history <span class="sub">last 60 probes</span></h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Time</th><th>Svc</th><th>OK</th><th>ms</th></tr></thead>
+      <tbody id="health-body"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+    </table></div>
+  </div>
+</section>
+</div>
+
+<!-- ============ LOG ============ -->
+<div id="tab-log" class="hidden">
+<section class="panel wide">
+  <h2>Request log <span class="sub">sqlite · click a row to load it into Decide</span>
+    <button class="danger" onclick="clearHistory()">Clear</button></h2>
+  <div class="table-wrap tall"><table>
+    <thead><tr><th>#</th><th>Time</th><th>Model</th><th>Preset</th><th>Status</th><th>Total</th><th>Load</th><th>Eval</th><th>Summary</th></tr></thead>
+    <tbody id="hist-body"><tr><td colspan="9" class="muted">Loading…</td></tr></tbody>
+  </table></div>
+</section>
+</div>
+
+<!-- ============ API ============ -->
+<div id="tab-api" class="hidden">
+<section class="panel wide">
+  <h2>Use OWI as a webservice <span class="sub">same port 11524 · full route map at <a href="/api" target="_blank">GET /api</a></span></h2>
+<pre id="api-snippet" class="out">B=http://&lt;IPG-IP&gt;:11524
+
+# decide (preset fills in the questions)
+curl -s $B/api/decide -H 'Content-Type: application/json' -d '{
+  "model": "laya", "preset": "triage",
+  "state": {"message": "You charged me twice, refund NOW!"}
+}' | python3 -m json.tool
+
+# decide with your own questions
+curl -s $B/api/decide -H 'Content-Type: application/json' -d '{
+  "model": "decider:4b", "keep_alive": "10m",
+  "state": "I cannot log in since this morning, demo at 3pm.",
+  "questions": {"angry": {"type": "noul", "instructions": "Is the customer angry?"}}
+}' | python3 -m json.tool
+
+# models
+curl -s $B/api/models | python3 -m json.tool            # local models (+default_model)
+curl -s $B/api/models/running | python3 -m json.tool   # loaded models
+curl -s $B/api/policy | python3 -m json.tool           # loaded-model policy
+curl -s -X POST $B/api/policy -d '{"default_model":"laya:latest","max_loaded_models":2}'
+curl -s -X POST $B/api/models/show -d '{"model":"laya"}'
+curl -s -X POST $B/api/models/load -d '{"model":"laya:en","keep_alive":-1}'
+curl -s -X POST $B/api/models/unload -d '{"model":"laya:en"}'
+curl -s -X POST $B/api/models/pull -d '{"model":"decider"}'
+curl -s -X DELETE $B/api/models -d '{"model":"my-old-model"}'
+curl -s -X POST $B/api/models/copy -d '{"source":"laya:en","destination":"my-guard"}'
+curl -s -X POST $B/api/models/create -d '{"model":"triage","from":"laya:en"}'
+
+# MCP lifecycle + tools
+curl -s -X POST $B/api/mcp/start | python3 -m json.tool
+curl -s $B/api/mcp/status | python3 -m json.tool
+curl -s -X POST $B/api/mcp/call -H 'Content-Type: application/json' -d '{
+  "tool": "decide", "args": {"model": "laya", "preset": "triage",
+    "state": "Refund my double charge please"}}' | python3 -m json.tool
+curl -s -X POST $B/api/mcp/stop
+
+# generic passthrough to any ollaya path (logged)
+curl -s -X POST $B/api/proxy -d '{"method":"GET","path":"/api/tags"}'
+curl -s -X POST $B/api/proxy -d '{"method":"POST","path":"/v1/systemone","body":{"model":"laya",...}}'
+
+# history + stats
+curl -s "$B/api/history?limit=30" | python3 -m json.tool
+curl -s $B/api/history/123 | python3 -m json.tool
+curl -s $B/api/metrics | python3 -m json.tool</pre>
+</section>
+</div>
+
+<footer><span id="foot" class="muted"></span> · Ollaya <code id="foot-ollaya"></code> · MCP <code id="foot-mcp"></code></footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+# Prepared for the later docker move. NOT used yet.
+services:
+  ollaya-webui:
+    build: .
+    image: ollaya-webui:latest
+    container_name: ollaya-webui
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:11524:11524"
+    environment:
+      - OWI_CONFIG=/config/ollaya-webui.yaml
+      - OWI_DB=/data/owi.db
+      - OLLAYA_BASE_URL=http://host.docker.internal:11435
+      - OLLAYA_MCP_ADDR=127.0.0.1:11436
+      - OWI_TIMEOUT_S=300
+    volumes:
+      - ./config:/config:ro
+      - ./data:/data
+      - ./src/static:/app/static:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

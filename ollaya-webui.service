@@ -1,0 +1,16 @@
+[Unit]
+Description=Ollaya Web UI (port 11524)
+After=network-online.target ollaya.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+KillMode=process
+WorkingDirectory=%h/Programs/ollaya/webui
+ExecStart=%h/Programs/ollaya/webui/.venv/bin/python src/main.py
+Restart=always
+RestartSec=3
+Environment="OWI_PORT=11524"
+
+[Install]
+WantedBy=default.target
