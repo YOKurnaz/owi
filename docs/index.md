@@ -27,17 +27,17 @@ and its **MCP server** (`ollaya mcp --http`).
 ## Contents
 
 - [Install — pick one path](#install--pick-one-path)
-  - [A1) Bare metal](#a1-bare-metal)
-  - [A2) Docker](#a2-docker)
+  - [Bare metal](#bare-metal)
+  - [Docker](#docker)
 - [Quick API taste](#quick-api-taste)
 
 ## Install — pick one path
 
 Requirements: [Ollaya](https://ollaya.dev/docs/quickstart) serving
-(default `http://127.0.0.1:11435`), plus Python 3.10+ (A1)
-**or** Docker (A2) — not both on the same host.
+(default `http://127.0.0.1:11435`), plus Python 3.10+ (bare metal)
+**or** Docker (container) — not both on the same host.
 
-### A1) Bare metal
+### Bare metal
 
 ```bash
 git clone https://github.com/YOKurnaz/owi.git
@@ -50,9 +50,9 @@ bash run.sh
 
 First login is `admin / admin` — change it immediately in the **User** tab.
 Or run as a service: see the
-[README](https://github.com/YOKurnaz/owi#option-a--bare-metal-venv--systemd).
+[README](https://github.com/YOKurnaz/owi#bare-metal-venv--systemd).
 
-### A2) Docker
+### Docker
 
 ```bash
 git clone https://github.com/YOKurnaz/owi.git

@@ -10,9 +10,9 @@ and its **MCP server** (`ollaya mcp --http`).
 
 - [Features](#features)
 - [Requirements](#requirements)
-- A) [Installation — pick one path](#a-installation--pick-one-path)
-  - [A1) Option A — Bare metal (venv + systemd)](#option-a--bare-metal-venv--systemd)
-  - [A2) Option B — Docker (build the image yourself)](#option-b--docker-build-the-image-yourself)
+- [Installation — pick one path](#installation--pick-one-path)
+  - [Bare metal (venv + systemd)](#bare-metal-venv--systemd)
+  - [Docker (build the image yourself)](#docker-build-the-image-yourself)
 - [Configuration](#configuration)
 - [Auth quick reference](#auth-quick-reference)
 - [API quick reference](#api-quick-reference)
@@ -46,14 +46,14 @@ and its **MCP server** (`ollaya mcp --http`).
 
 ---
 
-# A) Installation — pick one path
+# Installation — pick one path
 
-> Do **either** A1 **or** A2 — not both on the same host
+> Pick **one** of the two options below — not both on the same host
 > (they'd fight over port 11524 and the `./data` sqlite db).
 
-## Option A — Bare metal (venv + systemd)
+## Bare metal (venv + systemd)
 
-> Option A1 — install [A2 (Docker)](#option-b--docker-build-the-image-yourself) instead if you prefer containers.
+> Prefer containers? Install [Docker](#docker-build-the-image-yourself) instead.
 
 ```bash
 git clone https://github.com/YOKurnaz/owi.git
@@ -74,7 +74,7 @@ nohup .venv/bin/python src/main.py > data/webui.log 2>&1 &
 
 First login is `admin / admin` — change it immediately in the **User** tab.
 
-## Run as a service (systemd user unit, no root)
+### Run as a service (systemd user unit, no root)
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -90,9 +90,9 @@ See [`systemd/README.md`](systemd/README.md) for details
 
 ---
 
-# Option B — Docker (build the image yourself)
+## Docker (build the image yourself)
 
-> Option A2 — install [A1 (bare metal)](#option-a--bare-metal-venv--systemd) instead if you prefer a venv.
+> Prefer a venv? Install [Bare metal](#bare-metal-venv--systemd) instead.
 
 The image holds the OWI web UI only — Ollaya itself keeps running on the
 host (or wherever `OLLAYA_BASE_URL` points). Steps:
@@ -112,7 +112,7 @@ mkdir -p data config
 # NOTE: compose as shipped assumes Ollaya is reachable at
 # host.docker.internal:11435 — but Ollaya binds loopback by default
 # (see Notes), so prefer --network host (3b) on the same machine,
-# or give Ollaya a non-loopback bind first (option B in Notes).
+# or give Ollaya a non-loopback bind first (bridge-networking note below).
 docker compose up -d --build
 docker compose logs -f ollaya-webui   # Ctrl-C to detach
 # UI: http://<HOST-IP>:11524 (first login: admin / admin)
@@ -136,10 +136,10 @@ Notes:
 - Ollaya listens on loopback (`127.0.0.1:11435`) by default, so a container
   reaching it via `host.docker.internal` gets **connection refused** — the
   host gateway (e.g. `172.17.0.1`) is not loopback. Two ways around it:
-  - **A (simplest, same host):** run the container with host networking
+  - **Same host (simplest):** run the container with host networking
     (`docker run --network host ...`, drop `-p`/`--add-host`), then
     `OLLAYA_BASE_URL=http://127.0.0.1:11435` works from inside.
-  - **B (keep bridge networking):** make Ollaya listen off-loopback, e.g.
+  - **Bridge networking:** make Ollaya listen off-loopback, e.g.
     `sudo systemctl edit ollaya` with
     `Environment="OLLAYA_HOST=0.0.0.0:11435"` (+ `OLLAYA_API_KEY=...`, since
     it warns when exposed without a key), then `host.docker.internal`
