@@ -391,6 +391,20 @@ def init_db():
     cols = {r[1] for r in cur.execute("PRAGMA table_info(requests)").fetchall()}
     if "user" not in cols:
         cur.execute("ALTER TABLE requests ADD COLUMN user TEXT DEFAULT ''")
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS audit(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL,
+        user TEXT DEFAULT '',
+        via TEXT DEFAULT '',
+        client_ip TEXT DEFAULT '',
+        method TEXT DEFAULT '',
+        path TEXT DEFAULT '',
+        status_code INTEGER DEFAULT 0,
+        latency_ms REAL DEFAULT 0,
+        detail TEXT DEFAULT ''
+        )"""
+    )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_req_ts ON requests(ts)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_req_model ON requests(model)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_req_user ON requests(user)")
@@ -398,6 +412,9 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_mhealth_ts ON mcp_health(ts)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_sess_user ON sessions(user_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_keys_user ON api_keys(user_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit(ts)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_user ON audit(user)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_path ON audit(path)")
     conn.commit()
     try:
         row = cur.execute("SELECT COUNT(*) FROM users").fetchone()
@@ -571,6 +588,36 @@ def record_health(table, ok, latency_ms, status_code=0, detail=""):
         pass
 
 
+AUDIT_SKIP_PREFIXES = ("/static/", "/favicon.ico")
+AUDIT_SKIP_EXACT = {"/api/auth/status"}
+
+
+def _audit_should_skip(method, path):
+    if method not in ("POST", "PUT", "PATCH", "DELETE"):
+        return True
+    if path in AUDIT_SKIP_EXACT:
+        return True
+    for p in AUDIT_SKIP_PREFIXES:
+        if path.startswith(p):
+            return True
+    return False
+
+
+def log_audit(user, via, client_ip, method, path, status_code, latency_ms, detail=""):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            "INSERT INTO audit(ts, user, via, client_ip, method, path, status_code,"
+            " latency_ms, detail) VALUES(?,?,?,?,?,?,?,?,?)",
+            (now_iso(), user or "", via or "", client_ip or "", method or "",
+             path or "", status_code or 0, latency_ms or 0, (detail or "")[:500]),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
 def _headers():
     h = {}
     k = api_key()
@@ -656,6 +703,27 @@ async def lifespan(app):
 
 
 app = FastAPI(title="OWI - Ollaya Web Interface", version=APP_VERSION, lifespan=lifespan)
+
+
+@app.middleware("http")
+async def audit_middleware(req: Request, call_next):
+    t0 = time.perf_counter()
+    response = await call_next(req)
+    try:
+        ms = round((time.perf_counter() - t0) * 1000, 1)
+        path = req.url.path or ""
+        if not _audit_should_skip(req.method, path):
+            a = auth_from_request(req)
+            u = (a.get("user") or {}).get("username", "")
+            code = getattr(response, "status_code", 0) or 0
+            detail = ""
+            if code in (401, 403):
+                detail = "denied"
+            log_audit(u, a.get("via") or "", _client_ip(req),
+                      req.method, path, code, ms, detail)
+    except Exception:
+        pass
+    return response
 
 
 # ---------------- MCP process management ----------------
@@ -1037,6 +1105,15 @@ ROUTE_MAP = [
      "auth": "login", "params": {"id": "request id"}},
     {"method": "DELETE", "path": "/api/history", "doc": "clear log",
      "auth": "admin"},
+    {"method": "GET", "path": "/api/audit",
+     "doc": "management audit trail (?limit, ?user, ?path, ?status=ok|denied|error)",
+     "auth": "admin",
+     "params": {"limit": "1-500", "user": "username filter",
+                "path": "path substring", "status": "ok|denied|error"}},
+    {"method": "GET", "path": "/api/audit/stats", "doc": "audit totals + per-user/per-route",
+     "auth": "admin"},
+    {"method": "DELETE", "path": "/api/audit", "doc": "clear audit trail",
+     "auth": "admin"},
     {"method": "GET", "path": "/api/metrics",
      "doc": "perf: totals, per-model, per-preset, per-day, health 24h",
      "auth": "login"},
@@ -1267,9 +1344,9 @@ def version(req: Request):
     return {"ok": True, "ollaya_status": fwd["status_code"], "version": (fwd["data"] or {}).get("version")}
 
 
-def _client_ip(req: Request):
+def _client_ip(req):
     try:
-        return req.client.host if req.client else ""
+        return req.client.host if getattr(req, "client", None) else ""
     except Exception:
         return ""
 
@@ -2314,6 +2391,76 @@ def history_clear(req: Request = None):
         return redir
     conn = sqlite3.connect(DB_PATH)
     conn.execute("DELETE FROM requests")
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+# ---------------- API: audit (admin only) ----------------
+
+@app.get("/api/audit")
+def audit_list(req: Request = None, limit: int = 100, user: str = "",
+               path: str = "", status: str = ""):
+    redir, a = need_admin(req)
+    if redir is not None:
+        return redir
+    limit = max(1, min(int(limit or 100), 500))
+    conds, args = [], []
+    if user:
+        conds.append("user=?")
+        args.append(user)
+    if path:
+        conds.append("path LIKE ?")
+        args.append("%" + path + "%")
+    if status == "ok":
+        conds.append("status_code BETWEEN 200 AND 299")
+    elif status == "denied":
+        conds.append("status_code IN (401,403)")
+    elif status == "error":
+        conds.append("(status_code >= 400 AND status_code NOT IN (401,403))")
+    q = ("SELECT id, ts, user, via, client_ip, method, path, status_code,"
+         " latency_ms, detail FROM audit")
+    if conds:
+        q += " WHERE " + " AND ".join(conds)
+    q += " ORDER BY id DESC LIMIT ?"
+    conn = _db()
+    rows = conn.execute(q, args + [limit]).fetchall()
+    users = [r[0] for r in conn.execute(
+        "SELECT DISTINCT user FROM audit ORDER BY user").fetchall()]
+    conn.close()
+    return {"ok": True, "audit": [dict(r) for r in rows], "users": users}
+
+
+@app.get("/api/audit/stats")
+def audit_stats(req: Request = None):
+    redir, a = need_admin(req)
+    if redir is not None:
+        return redir
+    conn = _db()
+    total = conn.execute("SELECT COUNT(*) FROM audit").fetchone()[0]
+    denied = conn.execute(
+        "SELECT COUNT(*) FROM audit WHERE status_code IN (401,403)").fetchone()[0]
+    last24 = conn.execute(
+        "SELECT COUNT(*) FROM audit WHERE ts > datetime('now','-1 day')").fetchone()[0]
+    per_user = conn.execute(
+        "SELECT user, COUNT(*) c, SUM(CASE WHEN status_code IN (401,403) THEN 1 ELSE 0 END) d"
+        " FROM audit GROUP BY user ORDER BY c DESC LIMIT 20").fetchall()
+    per_path = conn.execute(
+        "SELECT method || ' ' || path AS route, COUNT(*) c FROM audit"
+        " GROUP BY route ORDER BY c DESC LIMIT 20").fetchall()
+    conn.close()
+    return {"ok": True, "total": total, "denied": denied, "last_24h": last24,
+            "per_user": [dict(r) for r in per_user],
+            "per_route": [dict(r) for r in per_path]}
+
+
+@app.delete("/api/audit")
+def audit_clear(req: Request = None):
+    redir, a = need_admin(req)
+    if redir is not None:
+        return redir
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM audit")
     conn.commit()
     conn.close()
     return {"ok": True}

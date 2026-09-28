@@ -16,13 +16,15 @@ const PRESET_FALLBACK_STATES = {
 function showTab(name){
   CURRENT_TAB = name;
   document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on', b.dataset.tab===name));
-  for (const t of ['decide','models','mcp','perf','log','user','api'])
+  if (name==='audit' && ME && ME.role !== 'admin'){ showTab('decide'); return; }
+  for (const t of ['decide','models','mcp','perf','log','user','api','audit'])
     document.getElementById('tab-'+t).classList.toggle('hidden', t!==name);
   if (name==='user'){ refreshMe(); refreshKeys(); refreshUsers(); }
   if (name==='api'){ apiInit(); }
   if (name==='models'){ refreshModels(); refreshRunning(); }
   if (name==='mcp'){ refreshMcp(); }
   if (name==='perf'||name==='log'){ refreshAll(false); }
+  if (name==='audit'){ refreshAudit(); refreshAuditStats(); }
 }
 
 function fmtMs(ms){
@@ -597,6 +599,7 @@ async function refreshMe(){
     setText('me-sub', ME.username + ' · ' + ME.role + (j.via ? ' · via ' + j.via : ''));
     document.getElementById('me-display').value = ME.display || ME.display_name || '';
     document.getElementById('admin-panel').style.display = ME.role === 'admin' ? '' : 'none';
+    document.getElementById('tabbtn-audit').style.display = ME.role === 'admin' ? '' : 'none';
   }catch(e){ location.href = '/login'; }
 }
 
@@ -922,6 +925,78 @@ function apiRenderHist(){
 function apiClearHistory(){
   API_HIST = [];
   apiRenderHist();
+}
+
+
+/* ---------- audit (admin only) ---------- */
+
+let AUDIT_DEBOUNCE = null;
+
+function refreshAuditDebounced(){
+  clearTimeout(AUDIT_DEBOUNCE);
+  AUDIT_DEBOUNCE = setTimeout(refreshAudit, 400);
+}
+
+async function refreshAudit(){
+  if (ME && ME.role !== 'admin') return;
+  try{
+    const u = document.getElementById('audit-user').value || '';
+    const q = document.getElementById('audit-path').value.trim();
+    const st = document.getElementById('audit-status').value || '';
+    const lim = document.getElementById('audit-limit').value || '100';
+    const qs = new URLSearchParams({limit: lim});
+    if (u) qs.set('user', u);
+    if (q) qs.set('path', q);
+    if (st) qs.set('status', st);
+    const r = await authFetch('/api/audit?' + qs.toString());
+    const j = await r.json();
+    if (!j.ok){
+      if (r.status === 403) showTab('decide');
+      return;
+    }
+    const sel = document.getElementById('audit-user');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">user: all</option>' + (j.users || []).map(x=>
+      '<option value="'+esc(x || '(anon)')+'">'+esc(x || '(anon)')+'</option>').join('');
+    if ([...sel.options].some(o=>o.value===cur)) sel.value = cur;
+    else if (u) sel.value = u;
+    const tb = document.getElementById('audit-body');
+    const rows = j.audit || [];
+    tb.innerHTML = rows.length ? rows.map(x=>'<tr><td>'+x.id+'</td><td>'
+      + new Date(x.ts).toLocaleString() + '</td><td>'+esc(x.user||'(anon)')+'</td><td>'+esc(x.via||'')+'</td><td>'
+      + esc(x.client_ip||'') + '</td><td><code>'+esc(x.method + ' ' + x.path)+'</code></td><td class="'
+      + (x.status_code < 400 ? 'ok-t' : 'err-t') + '">'+x.status_code+'</td><td>'+fmtMs(x.latency_ms)+'</td><td>'
+      + esc(x.detail||'') + '</td></tr>').join('')
+      : '<tr><td colspan="9" class="muted">No audit events.</td></tr>';
+  }catch(e){}
+}
+
+async function refreshAuditStats(){
+  if (ME && ME.role !== 'admin') return;
+  try{
+    const r = await authFetch('/api/audit/stats');
+    const j = await r.json();
+    if (!j.ok) return;
+    setText('a-total', j.total ?? '—');
+    setText('a-24', (j.last_24h ?? 0) + ' in last 24h');
+    setText('a-denied', j.denied ?? '—');
+    const top = (j.per_user || [])[0];
+    setText('a-topuser', top ? (top.user || '(anon)') + ' · ' + top.c : '—');
+    const tr = (j.per_route || [])[0];
+    setText('a-toproute', tr ? tr.route + ' · ' + tr.c : '—');
+    const rb = document.getElementById('audit-routes-body');
+    const routes = j.per_route || [];
+    rb.innerHTML = routes.length ? routes.map(x=>'<tr><td><code>'+esc(x.route)+'</code></td><td>'+x.c+'</td></tr>').join('')
+      : '<tr><td colspan="2" class="muted">No data.</td></tr>';
+  }catch(e){}
+}
+
+async function clearAudit(){
+  if (!confirm('Delete ALL audit events?')) return;
+  try{
+    await authFetch('/api/audit', {method: 'DELETE'});
+    refreshAudit(); refreshAuditStats();
+  }catch(e){}
 }
 
 /* ---------- health/settings/metrics/history ---------- */

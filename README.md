@@ -55,6 +55,10 @@ Decide tab (above) plus the other main views:
 
 ![OWI — Log tab: scoped request history](docs/tab-log.png)
 
+### Audit — admin-only trail of every mutating API call + denied attempts
+
+![OWI — Audit tab: management audit trail](docs/tab-audit.png)
+
 ## Requirements
 
 - [Ollaya](https://ollaya.dev/docs/quickstart) installed and serving

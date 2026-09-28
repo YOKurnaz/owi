@@ -41,6 +41,7 @@
   <button data-tab="log" onclick="showTab('log')">Log</button>
   <button data-tab="user" onclick="showTab('user')">User</button>
   <button data-tab="api" onclick="showTab('api')">API</button>
+  <button data-tab="audit" id="tabbtn-audit" onclick="showTab('audit')">Audit</button>
 </nav>
 
 <section class="cards" id="metrics-cards">
@@ -315,6 +316,51 @@
       <span id="eu-msg" class="muted"></span>
     </div>
   </div>
+</section>
+</div>
+
+<!-- ============ AUDIT (admin only) ============ -->
+<div id="tab-audit" class="hidden">
+<section class="grid2">
+  <div class="panel">
+    <h2>Management audit <span class="sub">admin only · every mutating /api call + denied attempts</span>
+      <button onclick="refreshAudit()">⟳ Reload</button></h2>
+    <div class="cards" style="padding:0 0 8px" id="audit-cards">
+      <div class="card"><div class="k">Events</div><div id="a-total" class="v">—</div><div id="a-24" class="bar-sub">—</div></div>
+      <div class="card"><div class="k">Denied</div><div id="a-denied" class="v">—</div><div class="bar-sub">401/403 attempts</div></div>
+      <div class="card"><div class="k">Top user</div><div id="a-topuser" class="v small">—</div><div id="a-toproute" class="bar-sub">—</div></div>
+    </div>
+    <div class="row">
+      <select id="audit-user" onchange="refreshAudit()"><option value="">user: all</option></select>
+      <input id="audit-path" spellcheck="false" placeholder="path contains…" oninput="refreshAuditDebounced()"/>
+      <select id="audit-status" onchange="refreshAudit()">
+        <option value="">status: all</option>
+        <option value="ok">2xx ok</option>
+        <option value="denied">401/403 denied</option>
+        <option value="error">other errors</option>
+      </select>
+      <select id="audit-limit" onchange="refreshAudit()">
+        <option value="50">50</option>
+        <option value="100" selected>100</option>
+        <option value="250">250</option>
+        <option value="500">500</option>
+      </select>
+      <button class="danger" onclick="clearAudit()">Clear</button>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Per route <span class="sub">top management calls</span></h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Route</th><th>Calls</th></tr></thead>
+      <tbody id="audit-routes-body"><tr><td colspan="2" class="muted">Loading…</td></tr></tbody>
+    </table></div>
+  </div>
+</section>
+<section class="panel wide" style="margin-top:0">
+  <div class="table-wrap tall"><table>
+    <thead><tr><th>#</th><th>Time</th><th>User</th><th>Via</th><th>IP</th><th>Route</th><th>Status</th><th>ms</th><th>Detail</th></tr></thead>
+    <tbody id="audit-body"><tr><td colspan="9" class="muted">Loading…</td></tr></tbody>
+  </table></div>
 </section>
 </div>
 

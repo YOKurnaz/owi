@@ -81,6 +81,10 @@ MCP notes) in the [README](https://github.com/YOKurnaz/owi#docker-build-the-imag
 
 ![OWI — Log tab](tab-log.png)
 
+### Audit — admin-only trail of management calls + denied attempts
+
+![OWI — Audit tab](tab-audit.png)
+
 ## Quick API taste
 
 ```bash
