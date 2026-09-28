@@ -56,10 +56,12 @@ Or run as a service: see the
 
 ### Docker
 
+Prebuilt: `ghcr.io/yokurnaz/owi:0.1.0` (`docker pull` it to skip the build).
+
 ```bash
 git clone https://github.com/YOKurnaz/owi.git
 cd owi
-docker build -t ollaya-webui:latest .
+docker build -t ollaya-webui:latest .   # or: docker pull ghcr.io/yokurnaz/owi:0.1.0
 mkdir -p data config
 docker compose up -d --build
 # UI: http://<HOST-IP>:11524 (first login: admin / admin)

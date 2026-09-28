@@ -119,11 +119,15 @@ See [`systemd/README.md`](systemd/README.md) for details
 The image holds the OWI web UI only — Ollaya itself keeps running on the
 host (or wherever `OLLAYA_BASE_URL` points). Steps:
 
+Prebuilt image (each release): `ghcr.io/yokurnaz/owi:0.1.0`
+(or `:latest`). Skip to step 2 with `IMAGE=ghcr.io/yokurnaz/owi:0.1.0`.
+
 ```bash
 git clone https://github.com/YOKurnaz/owi.git
 cd owi
 
-# 1. Build the image (name it what you like)
+# 1. Build the image (name it what you like) — or pull the release image:
+# docker pull ghcr.io/yokurnaz/owi:0.1.0
 docker build -t ollaya-webui:latest .
 
 # 2. Prepare local dirs (config ships a default yaml; sqlite db, logs and
