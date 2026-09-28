@@ -30,9 +30,11 @@ and its **MCP server** (`ollaya mcp --http`).
 
 - [Ollaya](https://ollaya.dev/docs/quickstart) installed and serving
   (default `http://127.0.0.1:11435` — `ollaya serve`, or it starts on demand).
-- Python 3.10+.
+- Python 3.10+ (bare-metal path only) **or** Docker (docker path only).
 
-## Install & run (bare metal)
+---
+
+# Option A — Bare metal (venv + systemd)
 
 ```bash
 git clone https://github.com/YOKurnaz/owi.git
@@ -53,7 +55,7 @@ nohup .venv/bin/python src/main.py > data/webui.log 2>&1 &
 
 First login is `admin / admin` — change it immediately in the **User** tab.
 
-### Run as a service (systemd user unit, no root)
+## Run as a service (systemd user unit, no root)
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -67,7 +69,12 @@ journalctl --user -u ollaya-webui -f
 See [`systemd/README.md`](systemd/README.md) for details
 (`KillMode=process` keeps a managed MCP child alive across restarts).
 
-### Docker (build the image yourself, step by step)
+---
+
+# Option B — Docker (build the image yourself)
+
+> Pick **either** Option A **or** Option B — not both on the same host
+> (they'd fight over port 11524 and the `./data` sqlite db).
 
 The image holds the OWI web UI only — Ollaya itself keeps running on the
 host (or wherever `OLLAYA_BASE_URL` points). Steps:
@@ -129,6 +136,8 @@ Notes:
   so `docker compose pull && docker compose up -d --build` keeps everything.
 - Health: the image probes `GET /login` (public); all `/api/*` need login.
   Rebuild after code changes: `docker compose up -d --build`.
+
+---
 
 ## Configuration
 

@@ -24,10 +24,13 @@ and its **MCP server** (`ollaya mcp --http`).
   health history, click-to-reload request log.
 - **Full API** — everything the UI does is a `GET/POST /api/*` call.
 
-## Install & run
+## Install — pick one path
 
 Requirements: [Ollaya](https://ollaya.dev/docs/quickstart) serving
-(default `http://127.0.0.1:11435`) and Python 3.10+.
+(default `http://127.0.0.1:11435`), plus Python 3.10+ (Option A)
+**or** Docker (Option B) — not both on the same host.
+
+**Option A — Bare metal:**
 
 ```bash
 git clone https://github.com/YOKurnaz/owi.git
@@ -39,18 +42,10 @@ bash run.sh
 ```
 
 First login is `admin / admin` — change it immediately in the **User** tab.
+Or run as a service: see the
+[README](https://github.com/YOKurnaz/owi#option-a--bare-metal-venv--systemd).
 
-**As a service** (systemd user unit, no root):
-
-```bash
-mkdir -p ~/.config/systemd/user
-cp systemd/ollaya-webui.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now ollaya-webui
-# UI: http://<HOST-IP>:11524
-```
-
-**Docker** — build the image yourself:
+**Option B — Docker:**
 
 ```bash
 git clone https://github.com/YOKurnaz/owi.git
