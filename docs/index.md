@@ -27,6 +27,7 @@ and its **MCP server** (`ollaya mcp --http`).
 ## Contents
 
 - [Install — pick one path](#install--pick-one-path)
+  - [Prebuilt image](#prebuilt-image)
   - [Bare metal](#bare-metal)
   - [Docker](#docker)
 - [Quick API taste](#quick-api-taste)
@@ -37,7 +38,27 @@ and its **MCP server** (`ollaya mcp --http`).
 Requirements: [Ollaya](https://ollaya.dev/docs/quickstart) serving
 (default `http://127.0.0.1:11435`, tested against **Ollaya 0.7.3**),
 plus Python 3.10+ (bare metal) **or** Docker (container) —
-not both on the same host.
+pick one path, not two on the same host.
+
+### Prebuilt image
+
+Fastest try-out, no clone or build (see
+[README](https://github.com/YOKurnaz/owi#prebuilt-image-ghcrio-no-clone)):
+
+```bash
+mkdir -p data config
+curl -s -o config/ollaya-webui.yaml \
+  https://raw.githubusercontent.com/YOKurnaz/owi/main/config/ollaya-webui.yaml
+docker run -d --name ollaya-webui --restart unless-stopped --network host \
+  -e OWI_CONFIG=/config/ollaya-webui.yaml -e OWI_DB=/data/owi.db \
+  -e OLLAYA_BASE_URL=http://127.0.0.1:11435 \
+  -v ./config:/config:ro -v ./data:/data \
+  ghcr.io/yokurnaz/owi:0.1.0
+# UI: http://<HOST-IP>:11524 (first login: admin / admin)
+```
+
+> Smoke-tested but not yet battle-tested — bare metal remains
+> best-supported for now.
 
 ### Bare metal
 

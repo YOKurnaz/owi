@@ -12,6 +12,7 @@ and its **MCP server** (`ollaya mcp --http`).
 - [Screenshots](#screenshots)
 - [Requirements](#requirements)
 - [Installation — pick one path](#installation--pick-one-path)
+  - [Prebuilt image (ghcr.io, no clone)](#prebuilt-image-ghcrio-no-clone)
   - [Bare metal (venv + systemd)](#bare-metal-venv--systemd)
   - [Docker (build the image yourself)](#docker-build-the-image-yourself)
 - [Configuration](#configuration)
@@ -70,8 +71,36 @@ Decide tab (above) plus the other main views:
 
 # Installation — pick one path
 
-> Pick **one** of the two options below — not both on the same host
+> Pick **one** of the three options below — not two on the same host
 > (they'd fight over port 11524 and the `./data` sqlite db).
+
+## Prebuilt image (ghcr.io, no clone)
+
+Fastest way to try OWI — no git clone, no build. Published per release at
+[ghcr.io/yokurnaz/owi](https://github.com/YOKurnaz/owi/pkgs/container/owi).
+
+> ⚠️ The image is smoke-tested (serves UI, login, decide via host Ollaya)
+> but not yet battle-tested in daily use — bare metal remains the
+> best-supported path for now.
+
+```bash
+mkdir -p data config
+curl -s -o config/ollaya-webui.yaml \
+  https://raw.githubusercontent.com/YOKurnaz/owi/main/config/ollaya-webui.yaml
+
+# same host as Ollaya (host networking reaches loopback Ollaya):
+docker run -d --name ollaya-webui --restart unless-stopped --network host \
+  -e OWI_CONFIG=/config/ollaya-webui.yaml \
+  -e OWI_DB=/data/owi.db \
+  -e OLLAYA_BASE_URL=http://127.0.0.1:11435 \
+  -v ./config:/config:ro \
+  -v ./data:/data \
+  ghcr.io/yokurnaz/owi:0.1.0
+# UI: http://<HOST-IP>:11524 (first login: admin / admin)
+```
+
+Tags: `:0.1.0` (pinned) or `:latest` (moves with releases).
+Same caveats as the Docker path below (MCP, API key, sqlite volume).
 
 ## Bare metal (venv + systemd)
 
