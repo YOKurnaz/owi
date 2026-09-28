@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>OWI — Login</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+<link rel="stylesheet" href="/static/style.css"/>
+<style>
+.login-wrap{max-width:380px;margin:12vh auto;padding:24px}
+.login-wrap h1{margin-bottom:4px}
+.login-wrap input{width:100%;margin-top:8px}
+.login-wrap button{width:100%;margin-top:14px;padding:10px}
+</style>
+</head>
+<body>
+<div class="login-wrap panel">
+  <h1>🧠 OWI</h1>
+  <div class="muted">Ollaya Web Interface — sign in</div>
+  <div id="first-run" class="hidden" style="margin-top:10px;background:#451a03;border:1px solid #9a3412;border-radius:8px;padding:8px 10px;font-size:12px">First run: log in as <code>admin / admin</code>, then change the password in the User tab.</div>
+  <input id="username" spellcheck="false" placeholder="username" autocomplete="username"/>
+  <input id="password" type="password" placeholder="password" autocomplete="current-password"/>
+  <button class="primary" id="btn-login" onclick="doLogin()">Sign in</button>
+  <div id="login-err" class="err hidden"></div>
+</div>
+<script>
+async function boot(){
+  try{
+    const r = await fetch('/api/auth/status');
+    const j = await r.json();
+    if (j.logged_in){ location.href = '/'; return; }
+    if (j.bootstrap_default) document.getElementById('first-run').classList.remove('hidden');
+  }catch(e){}
+  document.getElementById('password').addEventListener('keydown', e=>{ if (e.key === 'Enter') doLogin(); });
+  document.getElementById('username').focus();
+}
+async function doLogin(){
+  const u = document.getElementById('username').value.trim();
+  const p = document.getElementById('password').value;
+  const err = document.getElementById('login-err');
+  const btn = document.getElementById('btn-login');
+  err.classList.add('hidden');
+  btn.disabled = true; btn.textContent = 'Signing in…';
+  try{
+    const r = await fetch('/api/auth/login', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username: u, password: p})});
+    const j = await r.json();
+    if (!j.ok){ err.textContent = j.error || ('HTTP ' + r.status); err.classList.remove('hidden'); }
+    else location.href = '/';
+  }catch(e){ err.textContent = 'Request failed: ' + e.message; err.classList.remove('hidden'); }
+  btn.disabled = false; btn.textContent = 'Sign in';
+}
+boot();
+</script>
+</body>
+</html>

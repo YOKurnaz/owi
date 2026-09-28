@@ -14,6 +14,9 @@
     <div class="sub">Decide, manage models, control MCP — no curl · every call logged to sqlite · OWI itself is a webservice</div>
   </div>
   <div class="meta">
+    <span id="user-badge" class="badge">…</span>
+    <button id="btn-userpage" onclick="showTab('user')">Account</button>
+    <button id="btn-logout" onclick="logout()">Logout</button>
     <span id="health-badge" class="badge">checking…</span>
     <span id="health-lat" class="muted"></span>
     <span id="mcp-badge" class="badge">mcp …</span>
@@ -36,6 +39,7 @@
   <button data-tab="mcp" onclick="showTab('mcp')">MCP</button>
   <button data-tab="perf" onclick="showTab('perf')">Performance</button>
   <button data-tab="log" onclick="showTab('log')">Log</button>
+  <button data-tab="user" onclick="showTab('user')">User</button>
   <button data-tab="api" onclick="showTab('api')">API</button>
 </nav>
 
@@ -248,9 +252,69 @@
   <h2>Request log <span class="sub">sqlite · click a row to load it into Decide</span>
     <button class="danger" onclick="clearHistory()">Clear</button></h2>
   <div class="table-wrap tall"><table>
-    <thead><tr><th>#</th><th>Time</th><th>Model</th><th>Preset</th><th>Status</th><th>Total</th><th>Load</th><th>Eval</th><th>Summary</th></tr></thead>
-    <tbody id="hist-body"><tr><td colspan="9" class="muted">Loading…</td></tr></tbody>
+    <thead><tr><th>#</th><th>Time</th><th>User</th><th>Model</th><th>Preset</th><th>Status</th><th>Total</th><th>Load</th><th>Eval</th><th>Summary</th></tr></thead>
+    <tbody id="hist-body"><tr><td colspan="10" class="muted">Loading…</td></tr></tbody>
   </table></div>
+</section>
+</div>
+
+
+<!-- ============ USER ============ -->
+<div id="tab-user" class="hidden">
+<section class="grid2">
+  <div class="panel">
+    <h2>My account <span class="sub" id="me-sub">—</span></h2>
+    <div class="row">
+      <label style="min-width:200px">Display name <input id="me-display" spellcheck="false" placeholder="display name"/></label>
+      <button onclick="saveProfile()">Save</button>
+      <span id="profile-msg" class="muted"></span>
+    </div>
+    <h3>Change password</h3>
+    <div class="row">
+      <input id="pw-cur" type="password" placeholder="current password" autocomplete="current-password"/>
+      <input id="pw-new" type="password" placeholder="new password (min 8)" autocomplete="new-password"/>
+      <button onclick="changePassword()">Change</button>
+      <span id="pw-msg" class="muted"></span>
+    </div>
+    <div id="bootstrap-warn" class="err hidden">You are logged in as the default <code>admin / admin</code> — change the password now.</div>
+    <h3>My API keys <span class="sub">Bearer tokens for scripts — shown once</span></h3>
+    <div class="row">
+      <input id="key-name" spellcheck="false" placeholder="key name (e.g. n8n)"/>
+      <button class="primary" onclick="createKey()">＋ New key</button>
+      <span id="key-msg" class="muted"></span>
+    </div>
+    <pre id="key-once" class="out hidden">—</pre>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>Name</th><th>Prefix</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+      <tbody id="keys-body"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+    </table></div>
+  </div>
+  <div class="panel" id="admin-panel">
+    <h2>Users <span class="sub">admin only</span> <button onclick="refreshUsers()">⟳ Reload</button></h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>Username</th><th>Role</th><th>Display</th><th>Active</th><th>Last login</th><th></th></tr></thead>
+      <tbody id="users-body"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
+    </table></div>
+    <h3>Create user</h3>
+    <div class="row">
+      <input id="nu-name" spellcheck="false" placeholder="username"/>
+      <input id="nu-pass" type="password" placeholder="password (min 8)" autocomplete="new-password"/>
+      <select id="nu-role"><option value="user">user</option><option value="admin">admin</option></select>
+      <input id="nu-display" spellcheck="false" placeholder="display name (opt)"/>
+      <button class="primary" onclick="createUser()">＋ Create</button>
+      <span id="nu-msg" class="muted"></span>
+    </div>
+    <div class="muted" style="font-size:11px">Admin can: reset a user's password (set below), change role, disable (revokes sessions + keys), delete. History/log is scoped: users see only their own rows.</div>
+    <div class="row" style="margin-top:8px">
+      <input id="eu-id" spellcheck="false" placeholder="user id" style="max-width:80px"/>
+      <input id="eu-pass" type="password" placeholder="new password" autocomplete="new-password"/>
+      <select id="eu-role"><option value="">role…</option><option value="user">user</option><option value="admin">admin</option></select>
+      <select id="eu-active"><option value="">active…</option><option value="1">enable</option><option value="0">disable</option></select>
+      <button onclick="updateUser()">Apply</button>
+      <button class="danger" onclick="deleteUser()">Delete</button>
+      <span id="eu-msg" class="muted"></span>
+    </div>
+  </div>
 </section>
 </div>
 
@@ -298,7 +362,17 @@ curl -s -X POST $B/api/mcp/stop
 curl -s -X POST $B/api/proxy -d '{"method":"GET","path":"/api/tags"}'
 curl -s -X POST $B/api/proxy -d '{"method":"POST","path":"/v1/systemone","body":{"model":"laya",...}}'
 
-# history + stats
+# auth: login returns a session cookie; API clients use a bearer key instead
+curl -s -c jar $B/api/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"..."}'
+curl -s -b jar $B/api/auth/me | python3 -m json.tool
+curl -s -b jar -X POST $B/api/keys -d '{"name":"n8n"}'   # key shown ONCE
+KEY=owi_...; curl -s $B/api/decide -H "Authorization: Bearer $KEY" -d '{"model":"laya",...}'
+
+# users (admin) / profile
+curl -s -b jar $B/api/users | python3 -m json.tool
+curl -s -b jar -X POST $B/api/users -d '{"username":"ops","password":"...","role":"user"}'
+
+# history + stats (scoped to caller unless admin)
 curl -s "$B/api/history?limit=30" | python3 -m json.tool
 curl -s $B/api/history/123 | python3 -m json.tool
 curl -s $B/api/metrics | python3 -m json.tool</pre>

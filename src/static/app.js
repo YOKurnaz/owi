@@ -16,8 +16,9 @@ const PRESET_FALLBACK_STATES = {
 function showTab(name){
   CURRENT_TAB = name;
   document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on', b.dataset.tab===name));
-  for (const t of ['decide','models','mcp','perf','log','api'])
+  for (const t of ['decide','models','mcp','perf','log','user','api'])
     document.getElementById('tab-'+t).classList.toggle('hidden', t!==name);
+  if (name==='user'){ refreshMe(); refreshKeys(); refreshUsers(); }
   if (name==='models'){ refreshModels(); refreshRunning(); }
   if (name==='mcp'){ refreshMcp(); }
   if (name==='perf'||name==='log'){ refreshAll(false); }
@@ -568,6 +569,193 @@ async function mcpRead(){
   }catch(e){ document.getElementById('mcp-res-pre').textContent = 'error: ' + e.message; }
 }
 
+
+/* ---------- auth / users / keys ---------- */
+
+let ME = null;
+
+async function authFetch(url, opts){
+  opts = opts || {};
+  const r = await fetch(url, opts);
+  if (r.status === 401 && !url.includes('/api/auth/')){
+    location.href = '/login';
+    throw new Error('login required');
+  }
+  return r;
+}
+
+async function refreshMe(){
+  try{
+    const r = await authFetch('/api/auth/me');
+    const j = await r.json();
+    if (!j.ok){ location.href = '/login'; return; }
+    ME = j.user;
+    const ub = document.getElementById('user-badge');
+    ub.textContent = '● ' + ME.username + ' (' + ME.role + ')';
+    ub.className = 'badge ' + (ME.role === 'admin' ? 'ok' : '');
+    setText('me-sub', ME.username + ' · ' + ME.role + (j.via ? ' · via ' + j.via : ''));
+    document.getElementById('me-display').value = ME.display || ME.display_name || '';
+    document.getElementById('admin-panel').style.display = ME.role === 'admin' ? '' : 'none';
+  }catch(e){ location.href = '/login'; }
+}
+
+async function logout(){
+  try{ await fetch('/api/auth/logout', {method: 'POST'}); }catch(e){}
+  location.href = '/login';
+}
+
+async function saveProfile(){
+  const v = document.getElementById('me-display').value.trim();
+  setText('profile-msg', 'saving…');
+  try{
+    const r = await authFetch('/api/auth/profile', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({display_name: v})});
+    const j = await r.json();
+    setText('profile-msg', j.ok ? 'saved ✓' : 'error: ' + (j.error || r.status));
+    refreshMe();
+  }catch(e){ setText('profile-msg', 'error: ' + e.message); }
+}
+
+async function changePassword(){
+  const cur = document.getElementById('pw-cur').value;
+  const nw = document.getElementById('pw-new').value;
+  setText('pw-msg', 'changing…');
+  try{
+    const r = await authFetch('/api/auth/password', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({current_password: cur, new_password: nw})});
+    const j = await r.json();
+    setText('pw-msg', j.ok ? 'changed ✓' : 'error: ' + (j.error || r.status));
+    document.getElementById('pw-cur').value = '';
+    document.getElementById('pw-new').value = '';
+    if (j.ok) document.getElementById('bootstrap-warn').classList.add('hidden');
+  }catch(e){ setText('pw-msg', 'error: ' + e.message); }
+}
+
+async function refreshKeys(){
+  try{
+    const r = await authFetch('/api/keys');
+    const j = await r.json();
+    const tb = document.getElementById('keys-body');
+    const rows = j.keys || [];
+    const isAdmin = ME && ME.role === 'admin';
+    tb.innerHTML = rows.length ? rows.map(k=>'<tr><td>'+k.id+'</td><td>'+esc(k.name||'')+'</td>'
+      + (isAdmin ? '' : '') + '<td><code>'+esc(k.prefix||'')+'…</code></td><td>'
+      + (k.created_at ? new Date(k.created_at).toLocaleString() : '') + '</td><td>'
+      + (k.last_used_at ? new Date(k.last_used_at).toLocaleString() : 'never') + '</td>'
+      + '<td>' + (k.username ? esc(k.username) + ' · ' : '') + (k.revoked ? '<span class="err-t">revoked</span>'
+        : '<button class="danger" onclick="revokeKey('+k.id+')">revoke</button>') + '</td></tr>').join('')
+      : '<tr><td colspan="6" class="muted">No API keys yet.</td></tr>';
+  }catch(e){}
+}
+
+async function createKey(){
+  const name = document.getElementById('key-name').value.trim() || 'default';
+  setText('key-msg', 'creating…');
+  try{
+    const r = await authFetch('/api/keys', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name})});
+    const j = await r.json();
+    if (!j.ok){ setText('key-msg', 'error: ' + (j.error || r.status)); return; }
+    setText('key-msg', 'created ✓ — copy it now, it never shows again');
+    const el = document.getElementById('key-once');
+    el.classList.remove('hidden');
+    el.textContent = j.key;
+    document.getElementById('key-name').value = '';
+    refreshKeys();
+  }catch(e){ setText('key-msg', 'error: ' + e.message); }
+}
+
+async function revokeKey(id){
+  if (!confirm('Revoke API key #' + id + '?')) return;
+  try{
+    await authFetch('/api/keys/' + id, {method: 'DELETE'});
+    refreshKeys();
+  }catch(e){}
+}
+
+async function refreshUsers(){
+  if (ME && ME.role !== 'admin') return;
+  try{
+    const r = await authFetch('/api/users');
+    const j = await r.json();
+    if (!j.ok) return;
+    ME = ME || {role: 'admin'};
+    const tb = document.getElementById('users-body');
+    tb.innerHTML = (j.users || []).map(u=>'<tr><td>'+u.id+'</td><td>'+esc(u.username)+'</td><td>'+esc(u.role)+'</td><td>'
+      + esc(u.display_name||'') + '</td><td class="'+(u.active?'ok-t':'err-t')+'">'+(u.active?'yes':'no')+'</td><td>'
+      + (u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'never') + '</td>'
+      + '<td><button onclick="fillUser('+u.id+')">edit</button></td></tr>').join('')
+      || '<tr><td colspan="7" class="muted">No users.</td></tr>';
+  }catch(e){}
+}
+
+function fillUser(id){
+  document.getElementById('eu-id').value = id;
+  document.getElementById('eu-msg').textContent = 'editing #' + id + ' — fill fields, Apply';
+}
+
+async function createUser(){
+  const payload = {username: document.getElementById('nu-name').value.trim(),
+    password: document.getElementById('nu-pass').value,
+    role: document.getElementById('nu-role').value,
+    display_name: document.getElementById('nu-display').value.trim()};
+  setText('nu-msg', 'creating…');
+  try{
+    const r = await authFetch('/api/users', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)});
+    const j = await r.json();
+    setText('nu-msg', j.ok ? payload.username + ' created ✓' : 'error: ' + (j.error || r.status));
+    if (j.ok){
+      document.getElementById('nu-name').value = '';
+      document.getElementById('nu-pass').value = '';
+      document.getElementById('nu-display').value = '';
+      refreshUsers();
+    }
+  }catch(e){ setText('nu-msg', 'error: ' + e.message); }
+}
+
+async function updateUser(){
+  const id = document.getElementById('eu-id').value.trim();
+  if (!id){ setText('eu-msg', 'user id required'); return; }
+  const payload = {};
+  const pw = document.getElementById('eu-pass').value;
+  const role = document.getElementById('eu-role').value;
+  const act = document.getElementById('eu-active').value;
+  if (pw) payload.password = pw;
+  if (role) payload.role = role;
+  if (act !== '') payload.active = (act === '1');
+  setText('eu-msg', 'applying…');
+  try{
+    const r = await authFetch('/api/users/' + id, {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)});
+    const j = await r.json();
+    setText('eu-msg', j.ok ? 'updated ✓' : 'error: ' + (j.error || r.status));
+    document.getElementById('eu-pass').value = '';
+    refreshUsers();
+  }catch(e){ setText('eu-msg', 'error: ' + e.message); }
+}
+
+async function deleteUser(){
+  const id = document.getElementById('eu-id').value.trim();
+  if (!id){ setText('eu-msg', 'user id required'); return; }
+  if (!confirm('Delete user #' + id + '? Sessions + keys are removed too.')) return;
+  try{
+    const r = await authFetch('/api/users/' + id, {method: 'DELETE'});
+    const j = await r.json();
+    setText('eu-msg', j.ok ? 'deleted ✓' : 'error: ' + (j.error || r.status));
+    refreshUsers();
+  }catch(e){ setText('eu-msg', 'error: ' + e.message); }
+}
+
+async function checkBootstrap(){
+  try{
+    const r = await fetch('/api/auth/status');
+    const j = await r.json();
+    if (j.bootstrap_default && j.user && j.user.username === 'admin')
+      document.getElementById('bootstrap-warn').classList.remove('hidden');
+  }catch(e){}
+}
+
 /* ---------- health/settings/metrics/history ---------- */
 
 async function checkHealth(){
@@ -698,10 +886,10 @@ async function loadHistory(){
     const hb = document.getElementById('hist-body');
     const rows = j.history || [];
     hb.innerHTML = rows.length ? rows.map(h=>'<tr data-id="'+h.id+'"><td>'+h.id+'</td><td>'
-      + new Date(h.ts).toLocaleString() + '</td><td>'+esc(h.model||'')+'</td><td>'+esc(h.preset||'')+'</td><td class="'
+      + new Date(h.ts).toLocaleString() + '</td><td>'+esc(h.user||'')+'</td><td>'+esc(h.model||'')+'</td><td>'+esc(h.preset||'')+'</td><td class="'
       + (h.ok ? 'ok-t' : 'err-t') + '">'+h.status_code+'</td><td>'+fmtMs(h.latency_ms)+'</td><td>'+fmtMs(h.load_ms)+'</td><td>'+fmtMs(h.eval_ms)+'</td><td>'
       + summarize(h.resp_ex || '') + '</td></tr>').join('')
-      : '<tr><td colspan="9" class="muted">No requests logged yet.</td></tr>';
+      : '<tr><td colspan="10" class="muted">No requests logged yet.</td></tr>';
     hb.querySelectorAll('tr[data-id]').forEach(tr=>{
       tr.addEventListener('click', ()=>showDetail(tr.getAttribute('data-id')));
     });
@@ -756,8 +944,11 @@ function refreshAll(withHealth){
 }
 
 loadPreset();
-loadSettings();
-refreshModels().then(()=>{ loadPreset(); mcpToolChanged(); });
-refreshAll(true);
+refreshMe().then(()=>{
+  loadSettings();
+  refreshModels().then(()=>{ loadPreset(); mcpToolChanged(); });
+  refreshKeys(); refreshUsers(); checkBootstrap();
+  refreshAll(true);
+});
 mcpToolChanged();
 setInterval(()=>refreshAll(false), 15000);

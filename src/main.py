@@ -1,6 +1,9 @@
+import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import shutil
 import signal
 import socket
@@ -15,7 +18,7 @@ from datetime import datetime, timezone
 import requests
 import yaml
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 APP_VERSION = "0.1.0"
@@ -270,6 +273,34 @@ def policy_keepalive(model, explicit):
     return -1 if is_default_model(model) else 0
 
 
+SESSION_COOKIE = "owi_session"
+SESSION_TTL_S = 30 * 24 * 3600
+BOOTSTRAP_USER = "admin"
+BOOTSTRAP_PASS = "admin"
+VALID_ROLES = ("admin", "user")
+
+
+def _pw_hash(password, salt=None):
+    salt = salt or secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
+                             bytes.fromhex(salt), 210_000)
+    return f"pbkdf2-sha256$210000${salt}${dk.hex()}"
+
+
+def _pw_check(password, stored):
+    try:
+        algo, iters, salt, hexdk = stored.split("$")
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
+                                 bytes.fromhex(salt), int(iters))
+        return hmac.compare_digest(dk.hex(), hexdk)
+    except Exception:
+        return False
+
+
+def _valid_username(name):
+    return bool(re.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{1,31}$", name or ""))
+
+
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -280,6 +311,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ts TEXT NOT NULL,
         client_ip TEXT DEFAULT '',
+        user TEXT DEFAULT '',
         model TEXT DEFAULT '',
         preset TEXT DEFAULT '',
         path TEXT DEFAULT '/api/decide',
@@ -322,11 +354,63 @@ def init_db():
         value TEXT DEFAULT ''
         )"""
     )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS users(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        pw_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
+        display_name TEXT DEFAULT '',
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        last_login_at TEXT DEFAULT ''
+        )"""
+    )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS sessions(
+        token TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        ip TEXT DEFAULT '',
+        ua TEXT DEFAULT ''
+        )"""
+    )
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS api_keys(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL DEFAULT '',
+        prefix TEXT NOT NULL DEFAULT '',
+        key_hash TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        last_used_at TEXT DEFAULT '',
+        revoked INTEGER NOT NULL DEFAULT 0
+        )"""
+    )
+    cols = {r[1] for r in cur.execute("PRAGMA table_info(requests)").fetchall()}
+    if "user" not in cols:
+        cur.execute("ALTER TABLE requests ADD COLUMN user TEXT DEFAULT ''")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_req_ts ON requests(ts)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_req_model ON requests(model)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_req_user ON requests(user)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ohealth_ts ON ollaya_health(ts)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_mhealth_ts ON mcp_health(ts)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_sess_user ON sessions(user_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_keys_user ON api_keys(user_id)")
     conn.commit()
+    try:
+        row = cur.execute("SELECT COUNT(*) FROM users").fetchone()
+        if (row[0] if row else 0) == 0:
+            cur.execute(
+                "INSERT INTO users(username, pw_hash, role, display_name, active, created_at)"
+                " VALUES(?,?,?,?,?,?)",
+                (BOOTSTRAP_USER, _pw_hash(BOOTSTRAP_PASS), "admin",
+                 "Administrator", 1, now_iso()),
+            )
+            conn.commit()
+    except Exception:
+        pass
     conn.close()
 
 
@@ -334,17 +418,136 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-def log_request(client_ip, model, preset, path, state_json, questions_json,
+def _db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _public_user(row):
+    return {"id": row["id"], "username": row["username"], "role": row["role"],
+            "display_name": row["display_name"] or "", "active": bool(row["active"]),
+            "created_at": row["created_at"], "last_login_at": row["last_login_at"] or ""}
+
+
+def _get_user_by_id(uid):
+    try:
+        conn = _db()
+        row = conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        conn.close()
+        return row
+    except Exception:
+        return None
+
+
+def _get_user(username):
+    try:
+        conn = _db()
+        row = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+        conn.close()
+        return row
+    except Exception:
+        return None
+
+
+def _hash_key(raw):
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def auth_from_request(req: Request):
+    try:
+        auth = req.headers.get("authorization", "") or ""
+        if auth.lower().startswith("bearer "):
+            raw = auth[7:].strip()
+            if raw.startswith("owi_"):
+                conn = _db()
+                row = conn.execute(
+                    "SELECT ak.*, u.username, u.role, u.active FROM api_keys ak"
+                    " JOIN users u ON u.id = ak.user_id"
+                    " WHERE ak.key_hash=? AND ak.revoked=0", (_hash_key(raw),)).fetchone()
+                if row and row["active"]:
+                    try:
+                        conn.execute("UPDATE api_keys SET last_used_at=? WHERE id=?",
+                                     (now_iso(), row["id"]))
+                        conn.commit()
+                    except Exception:
+                        pass
+                    conn.close()
+                    return {"via": "api_key", "key_id": row["id"],
+                            "user": {"id": row["user_id"], "username": row["username"],
+                                     "role": row["role"]}}
+                conn.close()
+            return {"via": None, "user": None}
+        token = req.cookies.get(SESSION_COOKIE)
+        if not token:
+            return {"via": None, "user": None}
+        conn = _db()
+        row = conn.execute(
+            "SELECT s.*, u.username, u.role, u.active FROM sessions s"
+            " JOIN users u ON u.id = s.user_id WHERE s.token=?", (token,)).fetchone()
+        if not row:
+            conn.close()
+            return {"via": None, "user": None}
+        try:
+            exp = datetime.fromisoformat(row["expires_at"])
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp < datetime.now(timezone.utc):
+                conn.execute("DELETE FROM sessions WHERE token=?", (token,))
+                conn.commit()
+                conn.close()
+                return {"via": None, "user": None, "expired": True}
+        except Exception:
+            pass
+        if not row["active"]:
+            conn.close()
+            return {"via": None, "user": None}
+        u = {"id": row["user_id"], "username": row["username"], "role": row["role"]}
+        conn.close()
+        return {"via": "session", "user": u}
+    except Exception:
+        return {"via": None, "user": None}
+
+
+def need_login(req: Request):
+    a = auth_from_request(req)
+    if a.get("user"):
+        return None, a
+    accept = req.headers.get("accept", "") or ""
+    if "text/html" in accept and req.method == "GET":
+        return RedirectResponse("/login", status_code=302), a
+    return JSONResponse({"ok": False, "error": "login required"}, status_code=401), a
+
+
+def need_admin(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir, a
+    if a["user"]["role"] != "admin":
+        return JSONResponse({"ok": False, "error": "admin role required"}, status_code=403), a
+    return None, a
+
+
+def _set_session_cookie(resp, token):
+    resp.set_cookie(SESSION_COOKIE, token, max_age=SESSION_TTL_S, httponly=True,
+                    samesite="lax", path="/")
+
+
+def _clear_session_cookie(resp):
+    resp.delete_cookie(SESSION_COOKIE, path="/")
+
+
+def log_request(client_ip, user, model, preset, path, state_json, questions_json,
                 status_code, ok, latency_ms, response_json, error,
                 tokens_in=0, tokens_out=0, load_ms=0, eval_ms=0, answered_by=""):
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.execute(
-            "INSERT INTO requests(ts, client_ip, model, preset, path, state_json, questions_json,"
+            "INSERT INTO requests(ts, client_ip, user, model, preset, path, state_json, questions_json,"
             " status_code, ok, latency_ms, load_ms, eval_ms, answered_by, response_json, error,"
             " tokens_in, tokens_out)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (now_iso(), client_ip or "", model or "", preset or "", path or "/api/decide",
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (now_iso(), client_ip or "", user or "", model or "", preset or "", path or "/api/decide",
              state_json or "", questions_json or "", status_code or 0, 1 if ok else 0,
              latency_ms or 0, load_ms or 0, eval_ms or 0, answered_by or "",
              response_json or "", error or "", tokens_in or 0, tokens_out or 0),
@@ -715,8 +918,21 @@ def get_preset_questions(name):
 ROUTE_MAP = [
     ("GET", "/api", "machine-readable route map (this)"),
     ("GET", "/api/health", "webui status + ollaya + mcp health"),
+    ("GET", "/api/auth/status", "login state (public)"),
+    ("POST", "/api/auth/login", "{username, password} -> session cookie"),
+    ("POST", "/api/auth/logout", "clear session"),
+    ("GET", "/api/auth/me", "current user (login)"),
+    ("POST", "/api/auth/password", "{current_password, new_password} (login)"),
+    ("POST", "/api/auth/profile", "{display_name} (login)"),
+    ("GET", "/api/users", "list users (admin)"),
+    ("POST", "/api/users", "{username, password, role?, display_name?} (admin)"),
+    ("POST", "/api/users/{id}", "{role?, display_name?, active?, password?} (admin)"),
+    ("DELETE", "/api/users/{id}", "delete user (admin)"),
+    ("GET", "/api/keys", "list api keys: own, or all for admin (login)"),
+    ("POST", "/api/keys", "{name?, username? (admin)} -> returns key ONCE (login)"),
+    ("DELETE", "/api/keys/{id}", "revoke key (login; admin may revoke anyone's)"),
     ("GET", "/api/settings", "current config + where each value comes from"),
-    ("POST", "/api/settings", "{ollaya_base_url?, mcp_addr?, ollaya_api_key?, default_model?, max_loaded_models?}"),
+    ("POST", "/api/settings", "{ollaya_base_url?, mcp_addr?, ollaya_api_key?, default_model?, max_loaded_models?} (admin)"),
     ("GET", "/api/policy", "loaded-model policy: default_model, max_loaded, loaded now"),
     ("POST", "/api/policy", "{default_model?, max_loaded_models?} set policy (+ensure default loaded)"),
     ("GET", "/api/version", "ollaya server version"),
@@ -802,6 +1018,9 @@ def read_policy():
 
 @app.post("/api/policy")
 async def write_policy(req: Request):
+    redir, a = need_admin(req)
+    if redir is not None:
+        return redir
     try:
         body = await req.json()
     except Exception:
@@ -834,6 +1053,9 @@ async def write_policy(req: Request):
 
 @app.post("/api/settings")
 async def write_settings(req: Request):
+    redir, a = need_admin(req)
+    if redir is not None:
+        return redir
     try:
         body = await req.json()
     except Exception:
@@ -998,7 +1220,7 @@ def ensure_default_loaded():
         return {"ok": False, "error": str(e)[:300]}
 
 
-def _do_decide(client_ip, model, state, questions, keep_alive, extras, path="/api/decide", preset="",
+def _do_decide(client_ip, username, model, state, questions, keep_alive, extras, path="/api/decide", preset="",
                policy=True):
     effective_ka = policy_keepalive(model, keep_alive) if policy else keep_alive
     body = {"model": model}
@@ -1041,7 +1263,7 @@ def _do_decide(client_ip, model, state, questions, keep_alive, extras, path="/ap
                 body["keep_alive"] = 0
                 break
     err = err_text
-    log_request(client_ip, model, preset, path,
+    log_request(client_ip, username, model, preset, path,
                 json.dumps(state)[:12000] if state is not None else "",
                 json.dumps(questions)[:12000] if questions is not None else "",
                 fwd["status_code"], ok, fwd["latency_ms"],
@@ -1066,6 +1288,9 @@ def _do_decide(client_ip, model, state, questions, keep_alive, extras, path="/ap
 
 @app.post("/api/decide")
 async def api_decide(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     try:
         body = await req.json()
     except Exception:
@@ -1090,12 +1315,15 @@ async def api_decide(req: Request):
         return JSONResponse({"ok": False, "error": "state (or questions) required — use /api/models/load to warm a model without deciding"}, status_code=400)
     if extras is not None and not isinstance(extras, list):
         return JSONResponse({"ok": False, "error": "extras must be an array of strings"}, status_code=400)
-    res, code = _do_decide(_client_ip(req), model, state, questions, keep_alive, extras, preset=preset)
+    res, code = _do_decide(_client_ip(req), a["user"]["username"], model, state, questions, keep_alive, extras, preset=preset)
     return JSONResponse(res, status_code=code)
 
 
 @app.post("/api/proxy")
 async def api_proxy(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     try:
         body = await req.json()
     except Exception:
@@ -1121,7 +1349,7 @@ async def api_proxy(req: Request):
     answered_by = ""
     if ok and isinstance(fwd.get("data"), dict) and path in ("/api/decide",):
         ti, to, lm, em, answered_by = _extract_meta(fwd["data"])
-    log_request(_client_ip(req), model, "proxy", path,
+    log_request(_client_ip(req), a["user"]["username"], model, "proxy", path,
                 json.dumps(payload)[:12000] if payload is not None else "",
                 "", fwd["status_code"], ok, fwd["latency_ms"],
                 json.dumps(fwd.get("data"))[:20000] if fwd.get("data") else "",
@@ -1136,6 +1364,9 @@ async def api_proxy(req: Request):
 
 @app.post("/api/v1/systemone")
 async def api_v1_systemone(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     try:
         body = await req.json()
     except Exception:
@@ -1149,7 +1380,7 @@ async def api_v1_systemone(req: Request):
         ti, to = int(u.get("input_tokens") or 0), int(u.get("output_tokens") or 0)
     except Exception:
         pass
-    log_request(_client_ip(req), model, "v1", "/v1/systemone",
+    log_request(_client_ip(req), a["user"]["username"], model, "v1", "/v1/systemone",
                 json.dumps(body)[:12000], "", fwd["status_code"], ok, fwd["latency_ms"],
                 json.dumps(fwd.get("data"))[:20000] if fwd.get("data") else "",
                 fwd.get("error") or "", ti, to)
@@ -1197,6 +1428,9 @@ def models_running():
 
 @app.post("/api/models/show")
 async def models_show(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     try:
         body = await req.json()
     except Exception:
@@ -1217,6 +1451,9 @@ async def models_show(req: Request):
 
 @app.post("/api/models/load")
 async def models_load(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     try:
         body = await req.json()
     except Exception:
@@ -1228,7 +1465,7 @@ async def models_load(req: Request):
     payload = {"model": model, "keep_alive": ka}
     fwd = ollaya_request("POST", "/api/decide", payload, timeout=TIMEOUT_S)
     ok = fwd["status_code"] == 200
-    log_request(_client_ip(req), model, "load", "/api/decide",
+    log_request(_client_ip(req), a["user"]["username"], model, "load", "/api/decide",
                 "", json.dumps({"keep_alive": ka})[:500],
                 fwd["status_code"], ok, fwd["latency_ms"],
                 json.dumps(fwd["data"])[:4000] if fwd["data"] else "",
@@ -1242,6 +1479,9 @@ async def models_load(req: Request):
 
 @app.post("/api/models/unload")
 async def models_unload(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     try:
         body = await req.json()
     except Exception:
@@ -1251,7 +1491,7 @@ async def models_unload(req: Request):
         return JSONResponse({"ok": False, "error": "model is required"}, status_code=400)
     fwd = ollaya_request("POST", "/api/decide", {"model": model, "keep_alive": 0})
     ok = fwd["status_code"] == 200
-    log_request(_client_ip(req), model, "unload", "/api/decide",
+    log_request(_client_ip(req), a["user"]["username"], model, "unload", "/api/decide",
                 "", json.dumps({"keep_alive": 0})[:200],
                 fwd["status_code"], ok, fwd["latency_ms"],
                 json.dumps(fwd["data"])[:2000] if fwd["data"] else "",
@@ -1264,6 +1504,9 @@ async def models_unload(req: Request):
 
 @app.post("/api/models/pull")
 async def models_pull(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     try:
         body = await req.json()
     except Exception:
@@ -1276,7 +1519,7 @@ async def models_pull(req: Request):
         return JSONResponse({"ok": False, "error": fwd["error"]}, status_code=502)
     code = fwd["status_code"] or 502
     ok = code == 200
-    log_request(_client_ip(req), model, "pull", "/api/pull", json.dumps({"model": model}),
+    log_request(_client_ip(req), a["user"]["username"], model, "pull", "/api/pull", json.dumps({"model": model}),
                 "", code, ok, fwd["latency_ms"],
                 json.dumps(fwd["data"])[:2000] if fwd["data"] else "",
                 fwd["error"] or "")
@@ -1289,6 +1532,9 @@ async def models_pull(req: Request):
 
 @app.delete("/api/models")
 async def models_delete(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     try:
         body = await req.json()
     except Exception:
@@ -1301,7 +1547,7 @@ async def models_delete(req: Request):
         return JSONResponse({"ok": False, "error": fwd["error"]}, status_code=502)
     code = fwd["status_code"] or 502
     ok = code == 200
-    log_request(_client_ip(req), model, "delete", "/api/delete", json.dumps({"model": model}),
+    log_request(_client_ip(req), a["user"]["username"], model, "delete", "/api/delete", json.dumps({"model": model}),
                 "", code, ok, fwd["latency_ms"], "", fwd["error"] or "")
     if not ok:
         return JSONResponse({"ok": False, "ollaya_status": code,
@@ -1312,6 +1558,9 @@ async def models_delete(req: Request):
 
 @app.post("/api/models/copy")
 async def models_copy(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     try:
         body = await req.json()
     except Exception:
@@ -1328,7 +1577,7 @@ async def models_copy(req: Request):
         return JSONResponse({"ok": False, "ollaya_status": code,
                              "error": (fwd["data"] or {}).get("error", fwd["error"]),
                              "code": (fwd["data"] or {}).get("code")}, status_code=code)
-    log_request(_client_ip(req), dst, "copy", "/api/copy",
+    log_request(_client_ip(req), a["user"]["username"], dst, "copy", "/api/copy",
                 json.dumps({"source": src, "destination": dst}), "",
                 code, True, fwd["latency_ms"], "", "")
     return {"ok": True, "source": src, "destination": dst}
@@ -1336,6 +1585,9 @@ async def models_copy(req: Request):
 
 @app.post("/api/models/create")
 async def models_create(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     try:
         body = await req.json()
     except Exception:
@@ -1354,7 +1606,7 @@ async def models_create(req: Request):
         return JSONResponse({"ok": False, "error": fwd["error"]}, status_code=502)
     code = fwd["status_code"] or 502
     ok = code == 200
-    log_request(_client_ip(req), str(body.get("model")), "create", "/api/create",
+    log_request(_client_ip(req), a["user"]["username"], str(body.get("model")), "create", "/api/create",
                 json.dumps(payload)[:12000], "", code, ok, fwd["latency_ms"],
                 json.dumps(fwd["data"])[:4000] if fwd["data"] else "",
                 fwd["error"] or "")
@@ -1393,6 +1645,9 @@ def mcp_status_api():
 
 @app.post("/api/mcp/start")
 async def mcp_start_api(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     try:
         body = await req.json()
     except Exception:
@@ -1404,7 +1659,10 @@ async def mcp_start_api(req: Request):
 
 
 @app.post("/api/mcp/stop")
-async def mcp_stop_api():
+async def mcp_stop_api(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     res = await asyncio.to_thread(mcp_stop)
     code = 200 if res.get("ok") else 502
     return JSONResponse(res, status_code=code)
@@ -1427,6 +1685,9 @@ def mcp_tools():
 
 @app.post("/api/mcp/call")
 async def mcp_call(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     try:
         body = await req.json()
     except Exception:
@@ -1464,7 +1725,7 @@ async def mcp_call(req: Request):
             ti, to = int(u.get("input_tokens") or 0), int(u.get("output_tokens") or 0)
         except Exception:
             pass
-        log_request(_client_ip(req), str(args.get("model") or "laya"), str(args.get("preset") or "mcp"),
+        log_request(_client_ip(req), a["user"]["username"], str(args.get("model") or "laya"), str(args.get("preset") or "mcp"),
                     "mcp:decide", json.dumps(args.get("state"))[:12000] if args.get("state") is not None else "",
                     json.dumps(args.get("questions") or args.get("preset") or "")[:12000],
                     200, True, ms, json.dumps(parsed)[:20000], "", ti, to,
@@ -1482,6 +1743,9 @@ def mcp_resources():
 
 @app.post("/api/mcp/read")
 async def mcp_read(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     try:
         body = await req.json()
     except Exception:
@@ -1495,30 +1759,361 @@ async def mcp_read(req: Request):
     return {"ok": True, "uri": uri, "contents": (r["result"] or {}).get("contents", [])}
 
 
+# ---------------- API: auth + users + api keys ----------------
+
+@app.get("/api/auth/status")
+def auth_status(req: Request):
+    a = auth_from_request(req)
+    conn = _db()
+    n = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    conn.close()
+    return {"ok": True, "logged_in": bool(a.get("user")),
+            "via": a.get("via"), "user": a.get("user"),
+            "bootstrap_default": (n == 1 and _get_user(BOOTSTRAP_USER) is not None)}
+
+
+@app.post("/api/auth/login")
+async def auth_login(req: Request):
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
+    username = str((body or {}).get("username") or "").strip()
+    password = str((body or {}).get("password") or "")
+    if not username or not password:
+        return JSONResponse({"ok": False, "error": "username and password required"}, status_code=400)
+    row = _get_user(username)
+    if row is None or not _pw_check(password, row["pw_hash"] or ""):
+        return JSONResponse({"ok": False, "error": "invalid username or password"}, status_code=401)
+    if not row["active"]:
+        return JSONResponse({"ok": False, "error": "account disabled"}, status_code=403)
+    token = secrets.token_hex(32)
+    now = datetime.now(timezone.utc)
+    exp = now + __import__("datetime").timedelta(seconds=SESSION_TTL_S)
+    try:
+        conn = _db()
+        conn.execute("INSERT INTO sessions(token, user_id, created_at, expires_at, ip, ua)"
+                     " VALUES(?,?,?,?,?,?)",
+                     (token, row["id"], now.isoformat(), exp.isoformat(),
+                      _client_ip(req), (req.headers.get("user-agent") or "")[:200]))
+        conn.execute("UPDATE users SET last_login_at=? WHERE id=?", (now.isoformat(), row["id"]))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+    resp = JSONResponse({"ok": True, "user": _public_user(_get_user_by_id(row["id"])),
+                         "bootstrap_default": (username == BOOTSTRAP_USER and password == BOOTSTRAP_PASS),
+                         "via": "session"})
+    _set_session_cookie(resp, token)
+    return resp
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(req: Request):
+    token = req.cookies.get(SESSION_COOKIE)
+    if token:
+        try:
+            conn = _db()
+            conn.execute("DELETE FROM sessions WHERE token=?", (token,))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+    resp = JSONResponse({"ok": True})
+    _clear_session_cookie(resp)
+    return resp
+
+
+@app.get("/api/auth/me")
+def auth_me(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
+    row = _get_user_by_id(a["user"]["id"])
+    if row is None:
+        resp = JSONResponse({"ok": False, "error": "user not found"}, status_code=404)
+        _clear_session_cookie(resp)
+        return resp
+    return {"ok": True, "user": _public_user(row), "via": a.get("via")}
+
+
+@app.post("/api/auth/password")
+async def auth_password(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
+    cur = str((body or {}).get("current_password") or "")
+    new = str((body or {}).get("new_password") or "")
+    if len(new) < 8:
+        return JSONResponse({"ok": False, "error": "new password must be at least 8 characters"}, status_code=400)
+    row = _get_user_by_id(a["user"]["id"])
+    if row is None or not _pw_check(cur, row["pw_hash"] or ""):
+        return JSONResponse({"ok": False, "error": "current password is wrong"}, status_code=401)
+    try:
+        conn = _db()
+        conn.execute("UPDATE users SET pw_hash=? WHERE id=?", (_pw_hash(new), row["id"]))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+    return {"ok": True}
+
+
+@app.post("/api/auth/profile")
+async def auth_profile(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
+    name = str((body or {}).get("display_name") or "").strip()[:80]
+    try:
+        conn = _db()
+        conn.execute("UPDATE users SET display_name=? WHERE id=?", (name, a["user"]["id"]))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+    return {"ok": True, "display_name": name}
+
+
+@app.get("/api/users")
+def users_list(req: Request):
+    redir, a = need_admin(req)
+    if redir is not None:
+        return redir
+    conn = _db()
+    rows = conn.execute("SELECT * FROM users ORDER BY id").fetchall()
+    conn.close()
+    return {"ok": True, "users": [_public_user(r) for r in rows]}
+
+
+@app.post("/api/users")
+async def users_create(req: Request):
+    redir, a = need_admin(req)
+    if redir is not None:
+        return redir
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
+    username = str((body or {}).get("username") or "").strip()
+    password = str((body or {}).get("password") or "")
+    role = str((body or {}).get("role") or "user").strip()
+    display = str((body or {}).get("display_name") or "").strip()[:80]
+    if not _valid_username(username):
+        return JSONResponse({"ok": False, "error": "username: 2-32 chars, letters/digits/._-"}, status_code=400)
+    if len(password) < 8:
+        return JSONResponse({"ok": False, "error": "password must be at least 8 characters"}, status_code=400)
+    if role not in VALID_ROLES:
+        return JSONResponse({"ok": False, "error": "role must be admin or user"}, status_code=400)
+    try:
+        conn = _db()
+        cur = conn.execute(
+            "INSERT INTO users(username, pw_hash, role, display_name, active, created_at)"
+            " VALUES(?,?,?,?,?,?)",
+            (username, _pw_hash(password), role, display, 1, now_iso()))
+        uid = cur.lastrowid
+        conn.commit()
+        row = conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        conn.close()
+    except sqlite3.IntegrityError:
+        return JSONResponse({"ok": False, "error": "username already exists"}, status_code=409)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+    return {"ok": True, "user": _public_user(row)}
+
+
+@app.post("/api/users/{uid}")
+async def users_update(uid: int, req: Request):
+    redir, a = need_admin(req)
+    if redir is not None:
+        return redir
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
+    target = _get_user_by_id(uid)
+    if target is None:
+        return JSONResponse({"ok": False, "error": "user not found"}, status_code=404)
+    sets, vals = [], []
+    if "role" in body:
+        role = str(body["role"] or "").strip()
+        if role not in VALID_ROLES:
+            return JSONResponse({"ok": False, "error": "role must be admin or user"}, status_code=400)
+        if target["id"] == a["user"]["id"] and role != "admin":
+            return JSONResponse({"ok": False, "error": "cannot demote yourself"}, status_code=400)
+        sets.append("role=?")
+        vals.append(role)
+    if "display_name" in body:
+        sets.append("display_name=?")
+        vals.append(str(body["display_name"] or "").strip()[:80])
+    if "active" in body:
+        active = 1 if body["active"] else 0
+        if target["id"] == a["user"]["id"] and not active:
+            return JSONResponse({"ok": False, "error": "cannot disable yourself"}, status_code=400)
+        sets.append("active=?")
+        vals.append(active)
+    if "password" in body and body["password"]:
+        if len(str(body["password"])) < 8:
+            return JSONResponse({"ok": False, "error": "password must be at least 8 characters"}, status_code=400)
+        sets.append("pw_hash=?")
+        vals.append(_pw_hash(str(body["password"])))
+    if not sets:
+        return JSONResponse({"ok": False, "error": "nothing to update"}, status_code=400)
+    try:
+        conn = _db()
+        conn.execute("UPDATE users SET %s WHERE id=?" % ",".join(sets), vals + [uid])
+        if any("active" in s for s in sets) and not body.get("active", True):
+            conn.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+            conn.execute("UPDATE api_keys SET revoked=1 WHERE user_id=?", (uid,))
+        conn.commit()
+        row = conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        conn.close()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+    return {"ok": True, "user": _public_user(row)}
+
+
+@app.delete("/api/users/{uid}")
+async def users_delete(uid: int, req: Request):
+    redir, a = need_admin(req)
+    if redir is not None:
+        return redir
+    if uid == a["user"]["id"]:
+        return JSONResponse({"ok": False, "error": "cannot delete yourself"}, status_code=400)
+    target = _get_user_by_id(uid)
+    if target is None:
+        return JSONResponse({"ok": False, "error": "user not found"}, status_code=404)
+    try:
+        conn = _db()
+        conn.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+        conn.execute("DELETE FROM api_keys WHERE user_id=?", (uid,))
+        conn.execute("DELETE FROM users WHERE id=?", (uid,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+    return {"ok": True, "deleted": target["username"]}
+
+
+@app.get("/api/keys")
+def keys_list(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
+    conn = _db()
+    if a["user"]["role"] == "admin":
+        rows = conn.execute(
+            "SELECT ak.*, u.username FROM api_keys ak JOIN users u ON u.id=ak.user_id"
+            " ORDER BY ak.id DESC").fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM api_keys WHERE user_id=? ORDER BY id DESC",
+                            (a["user"]["id"],)).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d.pop("key_hash", None)
+        out.append(d)
+    return {"ok": True, "keys": out}
+
+
+@app.post("/api/keys")
+async def keys_create(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+    name = str((body or {}).get("name") or "").strip()[:60] or "default"
+    owner_id = a["user"]["id"]
+    if a["user"]["role"] == "admin" and (body or {}).get("username"):
+        target = _get_user(str(body["username"]).strip())
+        if target is None:
+            return JSONResponse({"ok": False, "error": "username not found"}, status_code=404)
+        owner_id = target["id"]
+    raw = "owi_" + secrets.token_urlsafe(32)
+    try:
+        conn = _db()
+        cur = conn.execute(
+            "INSERT INTO api_keys(user_id, name, prefix, key_hash, created_at, revoked)"
+            " VALUES(?,?,?,?,?,0)",
+            (owner_id, name, raw[:12], _hash_key(raw), now_iso()))
+        kid = cur.lastrowid
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=500)
+    return {"ok": True, "id": kid, "name": name, "prefix": raw[:12],
+            "key": raw, "note": "copy now — it is never shown again"}
+
+
+@app.delete("/api/keys/{kid}")
+async def keys_delete(kid: int, req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
+    conn = _db()
+    row = conn.execute("SELECT * FROM api_keys WHERE id=?", (kid,)).fetchone()
+    if row is None:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "key not found"}, status_code=404)
+    if a["user"]["role"] != "admin" and row["user_id"] != a["user"]["id"]:
+        conn.close()
+        return JSONResponse({"ok": False, "error": "not your key"}, status_code=403)
+    conn.execute("UPDATE api_keys SET revoked=1 WHERE id=?", (kid,))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "revoked": kid}
+
+
 # ---------------- API: history + metrics ----------------
 
 @app.get("/api/history")
-def history(limit: int = 30):
+def history(limit: int = 30, req: Request = None):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
+    admin = a["user"]["role"] == "admin"
+    me = a["user"]["username"]
     limit = max(1, min(int(limit), 200))
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT id, ts, client_ip, model, preset, path, status_code, ok, latency_ms,"
-        " load_ms, eval_ms, answered_by, substr(state_json,1,300) AS state_ex,"
-        " substr(response_json,1,800) AS resp_ex,"
-        " error, tokens_in, tokens_out FROM requests ORDER BY id DESC LIMIT ?",
-        (limit,)).fetchall()
+    q = ("SELECT id, ts, client_ip, user, model, preset, path, status_code, ok, latency_ms,"
+         " load_ms, eval_ms, answered_by, substr(state_json,1,300) AS state_ex,"
+         " substr(response_json,1,800) AS resp_ex,"
+         " error, tokens_in, tokens_out FROM requests")
+    args = ()
+    if not admin:
+        q += " WHERE user=?"
+        args = (me,)
+    q += " ORDER BY id DESC LIMIT ?"
+    rows = conn.execute(q, args + (limit,)).fetchall()
     conn.close()
     return {"history": [dict(r) for r in rows]}
 
 
 @app.get("/api/history/{rid}")
-def history_one(rid: int):
+def history_one(rid: int, req: Request = None):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT * FROM requests WHERE id=?", (rid,)).fetchone()
     conn.close()
     if not row:
+        return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
+    if a["user"]["role"] != "admin" and (row["user"] or "") != a["user"]["username"]:
         return JSONResponse({"ok": False, "error": "not found"}, status_code=404)
     d = dict(row)
     for k in ("state_json", "questions_json", "response_json"):
@@ -1530,7 +2125,10 @@ def history_one(rid: int):
 
 
 @app.delete("/api/history")
-def history_clear():
+def history_clear(req: Request = None):
+    redir, a = need_admin(req)
+    if redir is not None:
+        return redir
     conn = sqlite3.connect(DB_PATH)
     conn.execute("DELETE FROM requests")
     conn.commit()
@@ -1547,31 +2145,38 @@ def _pct(vals, p):
 
 
 @app.get("/api/metrics")
-def metrics():
+def metrics(req: Request = None):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
+    admin = a["user"]["role"] == "admin"
+    me = a["user"]["username"]
+    scope = "" if admin else " WHERE user='%s'" % me.replace("'", "''")
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     r = conn.execute(
         "SELECT COUNT(*) c, SUM(ok) okc, AVG(latency_ms) avg_ms,"
         " MAX(latency_ms) max_ms, MIN(latency_ms) min_ms,"
         " SUM(tokens_in) ti, SUM(tokens_out) t_o,"
-        " AVG(load_ms) avg_load, AVG(eval_ms) avg_eval FROM requests").fetchone()
+        " AVG(load_ms) avg_load, AVG(eval_ms) avg_eval FROM requests%s" % scope).fetchone()
     lat = [x[0] for x in conn.execute(
-        "SELECT latency_ms FROM requests ORDER BY id DESC LIMIT 500").fetchall()]
+        "SELECT latency_ms FROM requests%s ORDER BY id DESC LIMIT 500" % scope).fetchall()]
     per_model = conn.execute(
         "SELECT model, COUNT(*) c, AVG(latency_ms) avg_ms, SUM(ok) okc,"
-        " AVG(eval_ms) avg_eval, SUM(tokens_in) ti FROM requests"
-        " GROUP BY model ORDER BY c DESC").fetchall()
+        " AVG(eval_ms) avg_eval, SUM(tokens_in) ti FROM requests%s"
+        " GROUP BY model ORDER BY c DESC" % scope).fetchall()
     per_preset = conn.execute(
         "SELECT preset, COUNT(*) c, AVG(latency_ms) avg_ms, SUM(ok) okc"
-        " FROM requests GROUP BY preset ORDER BY c DESC").fetchall()
+        " FROM requests%s GROUP BY preset ORDER BY c DESC" % scope).fetchall()
     per_day = conn.execute(
         "SELECT substr(ts,1,10) d, COUNT(*) c, AVG(latency_ms) avg_ms"
-        " FROM requests GROUP BY d ORDER BY d DESC LIMIT 14").fetchall()
+        " FROM requests%s GROUP BY d ORDER BY d DESC LIMIT 14" % scope).fetchall()
     last24 = conn.execute(
-        "SELECT COUNT(*) FROM requests WHERE ts > datetime('now','-1 day')").fetchone()[0]
+        "SELECT COUNT(*) FROM requests WHERE ts > datetime('now','-1 day')%s" %
+        ("" if admin else " AND user='%s'" % me.replace("'", "''"))).fetchone()[0]
     last = conn.execute(
-        "SELECT id, ts, model, preset, status_code, ok, latency_ms FROM requests"
-        " ORDER BY id DESC LIMIT 1").fetchone()
+        "SELECT id, ts, model, preset, status_code, ok, latency_ms FROM requests%s"
+        " ORDER BY id DESC LIMIT 1" % scope).fetchone()
     orows = conn.execute(
         "SELECT ts, ok, latency_ms, status_code FROM ollaya_health"
         " ORDER BY id DESC LIMIT 60").fetchall()
@@ -1594,6 +2199,7 @@ def metrics():
     return {
         "ts": now_iso(),
         "ollaya_base_url": ollaya_base_url(),
+        "scope": "all" if admin else me,
         "mcp": mcp_status(),
         "policy": {"default_model": default_model(), "max_loaded_models": max_loaded_models(),
                    "loaded": [m.get("name") for m in loaded]},
@@ -1654,8 +2260,21 @@ async def _health_loop():
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+@app.get("/login", include_in_schema=False)
+def login_page():
+    p = os.path.join(STATIC_DIR, "login.html")
+    try:
+        html = open(p, encoding="utf-8").read()
+    except Exception:
+        return RedirectResponse("/", status_code=302)
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/", include_in_schema=False)
-def index():
+def index(req: Request):
+    redir, _ = need_login(req)
+    if redir is not None:
+        return redir
     p = os.path.join(STATIC_DIR, "index.html")
     html = open(p, encoding="utf-8").read()
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
