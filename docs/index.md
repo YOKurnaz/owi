@@ -30,6 +30,7 @@ and its **MCP server** (`ollaya mcp --http`).
   - [Bare metal](#bare-metal)
   - [Docker](#docker)
 - [Quick API taste](#quick-api-taste)
+- [Screenshots](#screenshots)
 
 ## Install — pick one path
 
@@ -65,6 +66,20 @@ docker compose up -d --build
 
 Step-by-step (plain `docker run`, volumes, `host.docker.internal`,
 MCP notes) in the [README](https://github.com/YOKurnaz/owi#docker-build-the-image-yourself-step-by-step).
+
+## Screenshots
+
+### Models — local library, loaded in memory, default-model policy
+
+![OWI — Models tab](tab-models.png)
+
+### Performance — per-model / per-preset / per-day, health history
+
+![OWI — Performance tab](tab-performance.png)
+
+### Request log — per-user rows, click to reload into Decide
+
+![OWI — Log tab](tab-log.png)
 
 ## Quick API taste
 

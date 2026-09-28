@@ -9,6 +9,7 @@ and its **MCP server** (`ollaya mcp --http`).
 ## Contents
 
 - [Features](#features)
+- [Screenshots](#screenshots)
 - [Requirements](#requirements)
 - [Installation — pick one path](#installation--pick-one-path)
   - [Bare metal (venv + systemd)](#bare-metal-venv--systemd)
@@ -37,6 +38,22 @@ and its **MCP server** (`ollaya mcp --http`).
   Ollaya + MCP health history, click-to-reload sqlite request log.
 - **Full API** — everything the UI does is a `GET/POST /api/*` call
   (route map at `GET /api`, curl examples in the UI's API tab).
+
+## Screenshots
+
+Decide tab (above) plus the other main views:
+
+### Models — local library, loaded in memory, default-model policy
+
+![OWI — Models tab: local models, loaded models, default-model policy](docs/tab-models.png)
+
+### Performance — per-model / per-preset / per-day, health history
+
+![OWI — Performance tab: metrics and health history](docs/tab-performance.png)
+
+### Request log — per-user rows, click to reload into Decide
+
+![OWI — Log tab: scoped request history](docs/tab-log.png)
 
 ## Requirements
 
