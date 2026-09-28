@@ -6,6 +6,18 @@ and its **MCP server** (`ollaya mcp --http`).
 
 ![OWI — Decide tab with live metrics, model policy and answers](docs/screenshot.png)
 
+## Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- A) [Installation — pick one path](#a-installation--pick-one-path)
+  - [A1) Option A — Bare metal (venv + systemd)](#option-a--bare-metal-venv--systemd)
+  - [A2) Option B — Docker (build the image yourself)](#option-b--docker-build-the-image-yourself)
+- [Configuration](#configuration)
+- [Auth quick reference](#auth-quick-reference)
+- [API quick reference](#api-quick-reference)
+- [Layout](#layout)
+
 ## Features
 
 - **Decide playground** — pick a model, a built-in preset
@@ -34,7 +46,14 @@ and its **MCP server** (`ollaya mcp --http`).
 
 ---
 
-# Option A — Bare metal (venv + systemd)
+# A) Installation — pick one path
+
+> Do **either** A1 **or** A2 — not both on the same host
+> (they'd fight over port 11524 and the `./data` sqlite db).
+
+## Option A — Bare metal (venv + systemd)
+
+> Option A1 — install [A2 (Docker)](#option-b--docker-build-the-image-yourself) instead if you prefer containers.
 
 ```bash
 git clone https://github.com/YOKurnaz/owi.git
@@ -73,8 +92,7 @@ See [`systemd/README.md`](systemd/README.md) for details
 
 # Option B — Docker (build the image yourself)
 
-> Pick **either** Option A **or** Option B — not both on the same host
-> (they'd fight over port 11524 and the `./data` sqlite db).
+> Option A2 — install [A1 (bare metal)](#option-a--bare-metal-venv--systemd) instead if you prefer a venv.
 
 The image holds the OWI web UI only — Ollaya itself keeps running on the
 host (or wherever `OLLAYA_BASE_URL` points). Steps:
