@@ -320,8 +320,40 @@
 
 <!-- ============ API ============ -->
 <div id="tab-api" class="hidden">
+<section class="grid2">
+  <div class="panel">
+    <h2>Explorer <span class="sub">try any endpoint — like the MCP tab</span>
+      <a href="/api/docs" target="_blank" style="font-size:11px">Swagger UI ↗</a></h2>
+    <div class="row">
+      <select id="api-route" onchange="apiRouteChanged()" style="max-width:100%"></select>
+    </div>
+    <div id="api-desc" class="muted" style="margin-bottom:8px"></div>
+    <div id="api-params"></div>
+    <label>body (JSON)
+      <textarea id="api-body" spellcheck="false" rows="10"></textarea>
+    </label>
+    <div class="row">
+      <button onclick="apiPrettify()">Prettify</button>
+      <button class="primary" id="btn-api-send" onclick="apiSend()">▶ Send</button>
+      <span id="api-meta" class="muted"></span>
+    </div>
+    <div id="api-err" class="err hidden"></div>
+    <h3>Response</h3>
+    <pre id="api-resp" class="out">—</pre>
+    <h3>curl <span class="sub">same call for scripts (uses your session cookie)</span></h3>
+    <pre id="api-curl" class="out">—</pre>
+  </div>
+  <div class="panel">
+    <h2>History <span class="sub">this tab only · click to reload</span>
+      <button class="danger" onclick="apiClearHistory()">Clear</button></h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Time</th><th>Route</th><th>Status</th><th>ms</th></tr></thead>
+      <tbody id="api-hist-body"><tr><td colspan="4" class="muted">No calls yet.</td></tr></tbody>
+    </table></div>
+  </div>
+</section>
 <section class="panel wide">
-  <h2>Use OWI as a webservice <span class="sub">same port 11524 · full route map at <a href="/api" target="_blank">GET /api</a></span></h2>
+  <h2>Cheat sheet <span class="sub">full route map at <a href="/api" target="_blank">GET /api</a> · spec at <a href="/api/openapi.json" target="_blank">/api/openapi.json</a></span></h2>
 <pre id="api-snippet" class="out">B=http://&lt;IPG-IP&gt;:11524
 
 # decide (preset fills in the questions)

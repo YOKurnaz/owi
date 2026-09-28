@@ -19,6 +19,7 @@ function showTab(name){
   for (const t of ['decide','models','mcp','perf','log','user','api'])
     document.getElementById('tab-'+t).classList.toggle('hidden', t!==name);
   if (name==='user'){ refreshMe(); refreshKeys(); refreshUsers(); }
+  if (name==='api'){ apiInit(); }
   if (name==='models'){ refreshModels(); refreshRunning(); }
   if (name==='mcp'){ refreshMcp(); }
   if (name==='perf'||name==='log'){ refreshAll(false); }
@@ -754,6 +755,173 @@ async function checkBootstrap(){
     if (j.bootstrap_default && j.user && j.user.username === 'admin')
       document.getElementById('bootstrap-warn').classList.remove('hidden');
   }catch(e){}
+}
+
+
+/* ---------- API explorer (like the MCP tab) ---------- */
+
+let API_ROUTES = [];
+let API_HIST = [];
+
+async function apiInit(){
+  if (API_ROUTES.length){ apiRenderHist(); return; }
+  try{
+    const r = await authFetch('/api');
+    const j = await r.json();
+    API_ROUTES = (j.routes || []).filter(x=>!x.ui);
+    const sel = document.getElementById('api-route');
+    const groups = {};
+    API_ROUTES.forEach((x, i)=>{
+      const g = (x.path.split('/')[2] || 'api');
+      (groups[g] = groups[g] || []).push(i);
+    });
+    sel.innerHTML = Object.entries(groups).map(([g, idx])=>
+      '<optgroup label="'+esc(g)+'">' + idx.map(i=>{
+        const x = API_ROUTES[i];
+        return '<option value="'+i+'">'+esc(x.method + ' ' + x.path)+'</option>';
+      }).join('') + '</optgroup>').join('');
+    const pre = API_ROUTES.findIndex(x=>x.path === '/api/decide');
+    sel.value = String(pre >= 0 ? pre : 0);
+    apiRouteChanged();
+  }catch(e){}
+}
+
+function apiFillParams(route){
+  const box = document.getElementById('api-params');
+  box.innerHTML = '';
+  const params = route.params || {};
+  for (const [name, desc] of Object.entries(params)){
+    const lab = document.createElement('label');
+    lab.style.minWidth = '180px';
+    lab.innerHTML = esc(name) + ' <span class="sub">' + esc(desc) + '</span>';
+    const inp = document.createElement('input');
+    inp.id = 'api-param-' + name;
+    inp.placeholder = desc;
+    inp.oninput = apiRefreshCurl;
+    lab.appendChild(inp);
+    box.appendChild(lab);
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.appendChild(lab);
+    box.appendChild(row);
+  }
+}
+
+function apiRouteChanged(){
+  const x = API_ROUTES[Number(document.getElementById('api-route').value)];
+  if (!x) return;
+  const badge = x.auth === 'public' ? 'public' : x.auth === 'admin' ? 'admin only' : 'login';
+  document.getElementById('api-desc').textContent = x.doc + ' · ' + badge;
+  apiFillParams(x);
+  const body = document.getElementById('api-body');
+  if (['POST','DELETE','PUT','PATCH'].includes(x.method)){
+    body.value = JSON.stringify(x.example !== undefined ? x.example : {}, null, 2);
+    body.closest('label').style.display = '';
+  } else {
+    body.value = '';
+    body.closest('label').style.display = 'none';
+  }
+  document.getElementById('api-resp').textContent = '—';
+  hideErr('api-err');
+  apiRefreshCurl();
+}
+
+function apiBuildUrl(){
+  const x = API_ROUTES[Number(document.getElementById('api-route').value)];
+  let path = x.path;
+  const qs = [];
+  for (const name of Object.keys(x.params || {})){
+    const el = document.getElementById('api-param-' + name);
+    const v = el ? el.value.trim() : '';
+    if (path.includes('{' + name + '}'))
+      path = path.replace('{' + name + '}', v ? encodeURIComponent(v) : '{' + name + '}');
+    else if (v) qs.push(encodeURIComponent(name) + '=' + encodeURIComponent(v));
+  }
+  return {route: x, url: path + (qs.length ? '?' + qs.join('&') : '')};
+}
+
+function apiRefreshCurl(){
+  try{
+    const {route, url} = apiBuildUrl();
+    let c = "curl -s -b jar -X " + route.method + " \"$B" + url + "\"";
+    if (['POST','DELETE','PUT','PATCH'].includes(route.method)){
+      let b = document.getElementById('api-body').value.trim() || '{}';
+      c += " -H 'Content-Type: application/json' -d '" + b.replace(/'/g, "'\\''") + "'";
+    }
+    document.getElementById('api-curl').textContent =
+      'B=http://<HOST-IP>:11524\n' + c.replace('"$B', '"$B');
+  }catch(e){}
+}
+
+function apiPrettify(){
+  try{
+    const el = document.getElementById('api-body');
+    el.value = JSON.stringify(JSON.parse(el.value || '{}'), null, 2);
+    hideErr('api-err');
+    apiRefreshCurl();
+  }catch(e){ showErr('api-err', 'body is not valid JSON: ' + e.message); }
+}
+
+async function apiSend(){
+  hideErr('api-err');
+  let built;
+  try{ built = apiBuildUrl(); }catch(e){ showErr('api-err', e.message); return; }
+  const {route, url} = built;
+  if (url.includes('{')){
+    showErr('api-err', 'fill in the {param} values first');
+    return;
+  }
+  let body;
+  if (['POST','DELETE','PUT','PATCH'].includes(route.method)){
+    try{ body = JSON.parse(document.getElementById('api-body').value || '{}'); }
+    catch(e){ showErr('api-err', 'body is not valid JSON: ' + e.message); return; }
+  }
+  const btn = document.getElementById('btn-api-send');
+  btn.disabled = true; btn.textContent = '⏳ Sending…';
+  setText('api-meta', 'sending…');
+  const t0 = performance.now();
+  try{
+    const opts = {method: route.method};
+    if (body !== undefined){ opts.headers = {'Content-Type': 'application/json'}; opts.body = JSON.stringify(body); }
+    const r = await authFetch(url, opts);
+    const ms = Math.round(performance.now() - t0);
+    let j;
+    try{ j = await r.json(); }catch(e){ j = {'_raw': (await r.text()).slice(0, 4000)}; }
+    document.getElementById('api-resp').textContent = JSON.stringify(j, null, 2).slice(0, 12000);
+    setText('api-meta', 'HTTP ' + r.status + ' · ' + fmtMs(ms) + ' · ' + new Date().toLocaleTimeString());
+    API_HIST.unshift({t: Date.now(), route: route.method + ' ' + route.path, status: r.status, ms,
+      url, body: body, resp: j});
+    API_HIST = API_HIST.slice(0, 30);
+    apiRenderHist();
+    if (['POST','DELETE'].includes(route.method)) refreshAll(false);
+  }catch(e){ showErr('api-err', 'Request failed: ' + e.message); }
+  btn.disabled = false; btn.textContent = '▶ Send';
+}
+
+function apiRenderHist(){
+  const tb = document.getElementById('api-hist-body');
+  if (!tb) return;
+  tb.innerHTML = API_HIST.length ? API_HIST.map((h, i)=>'<tr data-i="'+i+'"><td>'
+    + new Date(h.t).toLocaleTimeString() + '</td><td>'+esc(h.route)+'</td><td class="'
+    + (h.status < 400 ? 'ok-t' : 'err-t') + '">'+h.status+'</td><td>'+fmtMs(h.ms)+'</td></tr>').join('')
+    : '<tr><td colspan="4" class="muted">No calls yet.</td></tr>';
+  tb.querySelectorAll('tr[data-i]').forEach(tr=>{
+    tr.addEventListener('click', ()=>{
+      const h = API_HIST[Number(tr.getAttribute('data-i'))];
+      if (!h) return;
+      const idx = API_ROUTES.findIndex(x=>(x.method + ' ' + x.path) === h.route);
+      if (idx >= 0){ document.getElementById('api-route').value = String(idx); apiRouteChanged(); }
+      if (h.body !== undefined)
+        document.getElementById('api-body').value = JSON.stringify(h.body, null, 2);
+      document.getElementById('api-resp').textContent = JSON.stringify(h.resp, null, 2).slice(0, 12000);
+      apiRefreshCurl();
+    });
+  });
+}
+
+function apiClearHistory(){
+  API_HIST = [];
+  apiRenderHist();
 }
 
 /* ---------- health/settings/metrics/history ---------- */

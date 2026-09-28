@@ -916,54 +916,166 @@ def get_preset_questions(name):
 # ---------------- API: meta ----------------
 
 ROUTE_MAP = [
-    ("GET", "/api", "machine-readable route map (this)"),
-    ("GET", "/api/health", "webui status + ollaya + mcp health"),
-    ("GET", "/api/auth/status", "login state (public)"),
-    ("POST", "/api/auth/login", "{username, password} -> session cookie"),
-    ("POST", "/api/auth/logout", "clear session"),
-    ("GET", "/api/auth/me", "current user (login)"),
-    ("POST", "/api/auth/password", "{current_password, new_password} (login)"),
-    ("POST", "/api/auth/profile", "{display_name} (login)"),
-    ("GET", "/api/users", "list users (admin)"),
-    ("POST", "/api/users", "{username, password, role?, display_name?} (admin)"),
-    ("POST", "/api/users/{id}", "{role?, display_name?, active?, password?} (admin)"),
-    ("DELETE", "/api/users/{id}", "delete user (admin)"),
-    ("GET", "/api/keys", "list api keys: own, or all for admin (login)"),
-    ("POST", "/api/keys", "{name?, username? (admin)} -> returns key ONCE (login)"),
-    ("DELETE", "/api/keys/{id}", "revoke key (login; admin may revoke anyone's)"),
-    ("GET", "/api/settings", "current config + where each value comes from"),
-    ("POST", "/api/settings", "{ollaya_base_url?, mcp_addr?, ollaya_api_key?, default_model?, max_loaded_models?} (admin)"),
-    ("GET", "/api/policy", "loaded-model policy: default_model, max_loaded, loaded now"),
-    ("POST", "/api/policy", "{default_model?, max_loaded_models?} set policy (+ensure default loaded)"),
-    ("GET", "/api/version", "ollaya server version"),
-    ("POST", "/api/decide", "{model, state, questions?|preset?, keep_alive?, extras?} -> /api/decide, logged"),
-    ("POST", "/api/proxy", "{method, path, body?} generic passthrough to ollaya, logged"),
-    ("POST", "/api/v1/systemone", "typesafe-compatible decide passthrough, logged"),
-    ("GET", "/api/v1/models", "typesafe model list passthrough"),
-    ("GET", "/api/models", "local models (/api/tags)"),
-    ("GET", "/api/models/running", "loaded models (/api/ps) + which are kept loaded"),
-    ("POST", "/api/models/show", "{model} full details"),
-    ("POST", "/api/models/load", "{model, keep_alive?} keep loaded (default -1)"),
-    ("POST", "/api/models/unload", "{model} unload now"),
-    ("POST", "/api/models/pull", "{model} download (stream:false)"),
-    ("DELETE", "/api/models", "{model} delete"),
-    ("POST", "/api/models/copy", "{source, destination}"),
-    ("POST", "/api/models/create", "{model, from, questions?, calibration?, parameters?, license?, description?}"),
-    ("GET", "/api/presets", "built-in preset names + example states"),
-    ("GET", "/api/presets/{name}", "preset questions (live from MCP when up, else builtin)"),
-    ("GET", "/api/mcp/status", "mcp server status (running/managed/pid/tools)"),
-    ("POST", "/api/mcp/start", "{addr?} start 'ollaya mcp --http'"),
-    ("POST", "/api/mcp/stop", "stop the mcp server"),
-    ("GET", "/api/mcp/health", "mcp handshake probe (recorded)"),
-    ("GET", "/api/mcp/tools", "mcp tools/list"),
-    ("POST", "/api/mcp/call", "{tool, args} e.g. {tool:'decide', args:{model,state,preset}}"),
-    ("GET", "/api/mcp/resources", "mcp resources/list"),
-    ("POST", "/api/mcp/read", "{uri} e.g. ollaya://presets/triage"),
-    ("GET", "/api/history", "?limit=30 logged requests"),
-    ("GET", "/api/history/{id}", "full logged request"),
-    ("DELETE", "/api/history", "clear log"),
-    ("GET", "/api/metrics", "perf: totals, per-model, per-preset, per-day, health 24h"),
+    {"method": "GET", "path": "/api", "doc": "machine-readable route map (this)",
+     "auth": "login"},
+    {"method": "GET", "path": "/api/openapi.json", "doc": "Swagger/OpenAPI 3.0 spec of every /api/* route",
+     "auth": "login"},
+    {"method": "GET", "path": "/api/docs", "doc": "Swagger UI (try-it console, uses your session)",
+     "auth": "login", "ui": True},
+    {"method": "GET", "path": "/api/health", "doc": "webui status + ollaya + mcp health",
+     "auth": "login"},
+    {"method": "GET", "path": "/api/auth/status", "doc": "login state",
+     "auth": "public"},
+    {"method": "POST", "path": "/api/auth/login", "doc": "username + password -> session cookie",
+     "auth": "public",
+     "example": {"username": "admin", "password": "..."}},
+    {"method": "POST", "path": "/api/auth/logout", "doc": "clear session",
+     "auth": "login"},
+    {"method": "GET", "path": "/api/auth/me", "doc": "current user",
+     "auth": "login"},
+    {"method": "POST", "path": "/api/auth/password",
+     "doc": "change own password", "auth": "login",
+     "example": {"current_password": "...", "new_password": "at-least-8-chars"}},
+    {"method": "POST", "path": "/api/auth/profile", "doc": "change own display name",
+     "auth": "login", "example": {"display_name": "Ops"}},
+    {"method": "GET", "path": "/api/users", "doc": "list users",
+     "auth": "admin"},
+    {"method": "POST", "path": "/api/users", "doc": "create user",
+     "auth": "admin",
+     "example": {"username": "ops", "password": "...", "role": "user"}},
+    {"method": "POST", "path": "/api/users/{id}",
+     "doc": "role / display_name / active / password", "auth": "admin",
+     "example": {"role": "user", "active": True},
+     "params": {"id": "user id"}},
+    {"method": "DELETE", "path": "/api/users/{id}", "doc": "delete user",
+     "auth": "admin", "params": {"id": "user id"}},
+    {"method": "GET", "path": "/api/keys",
+     "doc": "list api keys: own, or all for admin", "auth": "login"},
+    {"method": "POST", "path": "/api/keys",
+     "doc": "create key -> returned ONCE", "auth": "login",
+     "example": {"name": "n8n"}},
+    {"method": "DELETE", "path": "/api/keys/{id}", "doc": "revoke key",
+     "auth": "login", "params": {"id": "key id"}},
+    {"method": "GET", "path": "/api/settings",
+     "doc": "current config + where each value comes from", "auth": "login"},
+    {"method": "POST", "path": "/api/settings",
+     "doc": "ollaya_base_url / mcp_addr / api key / policy", "auth": "admin",
+     "example": {"default_model": "laya:latest", "max_loaded_models": 2}},
+    {"method": "GET", "path": "/api/policy",
+     "doc": "loaded-model policy: default_model, max_loaded, loaded now",
+     "auth": "login"},
+    {"method": "POST", "path": "/api/policy",
+     "doc": "set policy (+ensure default loaded)", "auth": "admin",
+     "example": {"default_model": "laya:latest", "max_loaded_models": 2}},
+    {"method": "GET", "path": "/api/version", "doc": "ollaya server version",
+     "auth": "login"},
+    {"method": "POST", "path": "/api/decide",
+     "doc": "typed decision, logged", "auth": "login",
+     "example": {"model": "laya", "preset": "triage",
+                 "state": {"message": "You charged me twice, refund NOW!"}}},
+    {"method": "POST", "path": "/api/proxy",
+     "doc": "generic passthrough to ollaya, logged", "auth": "login",
+     "example": {"method": "GET", "path": "/api/tags"}},
+    {"method": "POST", "path": "/api/v1/systemone",
+     "doc": "typesafe-compatible decide passthrough, logged", "auth": "login",
+     "example": {"model": "laya", "state": "Can I get an invoice?",
+                 "questions": {"intent": {"type": "choice",
+                               "instructions": "What does the customer want?",
+                               "criteria": {"invoice": "needs invoice",
+                                            "refund": "wants money back"}}}}},
+    {"method": "GET", "path": "/api/v1/models", "doc": "typesafe model list passthrough",
+     "auth": "login"},
+    {"method": "GET", "path": "/api/models", "doc": "local models (/api/tags)",
+     "auth": "login"},
+    {"method": "GET", "path": "/api/models/running",
+     "doc": "loaded models (/api/ps) + policy", "auth": "login"},
+    {"method": "POST", "path": "/api/models/show", "doc": "one model's details",
+     "auth": "login", "example": {"model": "laya"}},
+    {"method": "POST", "path": "/api/models/load",
+     "doc": "keep loaded (default -1)", "auth": "login",
+     "example": {"model": "laya:en", "keep_alive": -1}},
+    {"method": "POST", "path": "/api/models/unload", "doc": "unload now",
+     "auth": "login", "example": {"model": "laya:en"}},
+    {"method": "POST", "path": "/api/models/pull",
+     "doc": "download (stream:false)", "auth": "login",
+     "example": {"model": "laya"}},
+    {"method": "DELETE", "path": "/api/models", "doc": "remove a model",
+     "auth": "login", "example": {"model": "my-old-model"}},
+    {"method": "POST", "path": "/api/models/copy", "doc": "copy to a new name",
+     "auth": "login",
+     "example": {"source": "laya:en", "destination": "my-guard"}},
+    {"method": "POST", "path": "/api/models/create",
+     "doc": "create from base (questions/calibration/precision)",
+     "auth": "login",
+     "example": {"model": "triage", "from": "laya:en"}},
+    {"method": "GET", "path": "/api/presets", "doc": "built-in preset names + states",
+     "auth": "login"},
+    {"method": "GET", "path": "/api/presets/{name}", "doc": "preset questions",
+     "auth": "login", "params": {"name": "triage|email|guard|moderation|router|agent"}},
+    {"method": "GET", "path": "/api/mcp/status",
+     "doc": "mcp server status (running/managed/pid/tools)", "auth": "login"},
+    {"method": "POST", "path": "/api/mcp/start",
+     "doc": "start 'ollaya mcp --http'", "auth": "login",
+     "example": {}},
+    {"method": "POST", "path": "/api/mcp/stop", "doc": "stop the mcp server",
+     "auth": "login"},
+    {"method": "GET", "path": "/api/mcp/health", "doc": "mcp handshake probe (recorded)",
+     "auth": "login"},
+    {"method": "GET", "path": "/api/mcp/tools", "doc": "mcp tools/list",
+     "auth": "login"},
+    {"method": "POST", "path": "/api/mcp/call",
+     "doc": "call an mcp tool", "auth": "login",
+     "example": {"tool": "decide", "args": {"model": "laya", "preset": "triage",
+                 "state": "Refund my double charge please"}}},
+    {"method": "GET", "path": "/api/mcp/resources", "doc": "mcp resources/list",
+     "auth": "login"},
+    {"method": "POST", "path": "/api/mcp/read", "doc": "read an mcp resource",
+     "auth": "login", "example": {"uri": "ollaya://presets/triage"}},
+    {"method": "GET", "path": "/api/history", "doc": "?limit=30 logged requests",
+     "auth": "login", "params": {"limit": "1-200"}},
+    {"method": "GET", "path": "/api/history/{id}", "doc": "full logged request",
+     "auth": "login", "params": {"id": "request id"}},
+    {"method": "DELETE", "path": "/api/history", "doc": "clear log",
+     "auth": "admin"},
+    {"method": "GET", "path": "/api/metrics",
+     "doc": "perf: totals, per-model, per-preset, per-day, health 24h",
+     "auth": "login"},
 ]
+
+
+def _openapi_spec():
+    paths = {}
+    for r in ROUTE_MAP:
+        if r.get("ui"):
+            continue
+        p, m = r["path"], r["method"]
+        has_body = m in ("POST", "DELETE", "PUT", "PATCH")
+        params = []
+        for name, desc in (r.get("params") or {}).items():
+            pin = "query" if ("{" + name + "}") not in p else "path"
+            params.append({"name": name, "in": pin, "required": pin == "path",
+                           "description": desc,
+                           "schema": {"type": "string"}})
+        op = {"summary": r["doc"], "tags": [p.split("/")[2] if len(p.split("/")) > 2 else "api"],
+              "security": [] if r.get("auth") == "public" else [{}, {"bearerAuth": []}],
+              "responses": {"200": {"description": "OK"}}}
+        if params:
+            op["parameters"] = params
+        if has_body and r.get("example") is not None:
+            op["requestBody"] = {"required": False, "content": {
+                "application/json": {"schema": {"type": "object"},
+                                     "example": r["example"]}}}
+        paths.setdefault(p, {})[m.lower()] = op
+    return {"openapi": "3.0.3",
+            "info": {"title": "OWI - Ollaya Web Interface", "version": APP_VERSION,
+                     "description": "Every /api/* call the UI makes. UI uses the session cookie; "
+                                    "scripts use Authorization: Bearer owi_... (User tab -> API keys)."},
+            "servers": [{"url": "/"}],
+            "components": {"securitySchemes": {
+                "bearerAuth": {"type": "http", "scheme": "bearer",
+                               "description": "OWI API key (owi_...)"}}},
+            "security": [{"bearerAuth": []}],
+            "paths": paths}
 
 
 @app.get("/api")
@@ -972,7 +1084,37 @@ def api_map(req: Request):
     if redir is not None:
         return redir
     return {"service": APP_NAME, "version": APP_VERSION, "ollaya": ollaya_base_url(),
-            "mcp": mcp_addr(), "routes": [{"method": m, "path": p, "doc": d} for m, p, d in ROUTE_MAP]}
+            "mcp": mcp_addr(), "user": a["user"],
+            "routes": ROUTE_MAP,
+            "openapi": "/api/openapi.json", "swagger_ui": "/api/docs"}
+
+
+@app.get("/api/openapi.json")
+def api_openapi(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
+    return _openapi_spec()
+
+
+@app.get("/api/docs", include_in_schema=False)
+def api_docs(req: Request):
+    redir, _ = need_login(req)
+    if redir is not None:
+        return redir
+    html = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"/>
+<title>OWI API — Swagger UI</title>
+<link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css"/>
+<style>body{margin:0}.topbar{display:none}</style>
+</head><body><div id="swagger-ui"></div>
+<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script>
+SwaggerUIBundle({url: "/api/openapi.json", dom_id: "#swagger-ui",
+  presets: [SwaggerUIBundle.presets.apis],
+  requestInterceptor: (r) => { r.credentials = "same-origin"; return r; }});
+</script></body></html>"""
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/health")
