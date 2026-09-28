@@ -19,8 +19,11 @@ services:
       - OLLAYA_MCP_ADDR=host.docker.internal:11436
       - OWI_TIMEOUT_S=300
     volumes:
+      # State (sqlite db, logs) + fallback config live OUTSIDE the image,
+      # so rebuilds/upgrades keep everything. Code (incl. src/static UI)
+      # is baked into the image via COPY — never mounted — so a new image
+      # really means new code, with no host-checkout skew.
       - ./config:/config:ro
       - ./data:/data
-      - ./src/static:/app/static:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
