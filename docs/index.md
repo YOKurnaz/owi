@@ -35,8 +35,9 @@ and its **MCP server** (`ollaya mcp --http`).
 ## Install — pick one path
 
 Requirements: [Ollaya](https://ollaya.dev/docs/quickstart) serving
-(default `http://127.0.0.1:11435`), plus Python 3.10+ (bare metal)
-**or** Docker (container) — not both on the same host.
+(default `http://127.0.0.1:11435`, tested against **Ollaya 0.7.3**),
+plus Python 3.10+ (bare metal) **or** Docker (container) —
+not both on the same host.
 
 ### Bare metal
 

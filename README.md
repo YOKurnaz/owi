@@ -63,6 +63,7 @@ Decide tab (above) plus the other main views:
 
 - [Ollaya](https://ollaya.dev/docs/quickstart) installed and serving
   (default `http://127.0.0.1:11435` — `ollaya serve`, or it starts on demand).
+  Tested against **Ollaya 0.7.3** (`/api/*`, `/v1/*`, `mcp --http`).
 - Python 3.10+ (bare-metal path only) **or** Docker (docker path only).
 
 ---
