@@ -27,7 +27,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"
 APP_NAME = "owi"
 CONFIG_PATH = os.environ.get("OWI_CONFIG", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "ollaya-webui.yaml"))
 DB_PATH = os.environ.get("OWI_DB", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "owi.db"))
