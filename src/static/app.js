@@ -25,6 +25,7 @@ function showTab(name){
   if (name==='mcp'){ refreshMcp(); }
   if (name==='perf'||name==='log'){ refreshAll(false); }
   if (name==='audit'){ refreshAudit(); refreshAuditStats(); }
+  if (name==='audit'){ loadRetention(); }
 }
 
 function fmtMs(ms){
@@ -1122,12 +1123,42 @@ function summarize(respEx){
   }catch(e){ return esc((respEx || '').slice(0, 80)); }
 }
 
+let HIST_DEBOUNCE = null;
+function loadHistoryDebounced(){
+  clearTimeout(HIST_DEBOUNCE);
+  HIST_DEBOUNCE = setTimeout(loadHistory, 400);
+}
+
 async function loadHistory(){
   try{
-    const r = await authFetch('/api/history?limit=40');
+    const qs = new URLSearchParams({
+      limit: document.getElementById('hist-limit').value || '40'});
+    const q = document.getElementById('hist-q').value.trim();
+    const mo = document.getElementById('hist-model').value;
+    const pr = document.getElementById('hist-preset').value;
+    const us = document.getElementById('hist-user').value;
+    const st = document.getElementById('hist-status').value;
+    const dy = document.getElementById('hist-days').value;
+    if (q) qs.set('q', q);
+    if (mo) qs.set('model', mo);
+    if (pr) qs.set('preset', pr);
+    if (us) qs.set('user', us);
+    if (st) qs.set('status', st);
+    if (dy && dy !== '0') qs.set('days', dy);
+    const r = await authFetch('/api/history?' + qs.toString());
     const j = await r.json();
     const hb = document.getElementById('hist-body');
     const rows = j.history || [];
+    setText('hist-count', (j.total_match ?? rows.length) + ' match');
+    const rt = j.retention || {};
+    const ct = j.counts || {};
+    setText('hist-retention', 'retention: log ' + (rt.log_retention_days ?? '?') + 'd / max '
+      + (rt.log_retention_max_rows ?? '?') + ' rows · audit ' + (rt.audit_retention_days ?? '?')
+      + 'd / max ' + (rt.audit_retention_max_rows ?? '?') + ' rows · db '
+      + fmtBytes(ct.db_bytes) + ' · ' + (ct.requests ?? '?') + ' log + '
+      + (ct.audit ?? '?') + ' audit rows'
+      + (ME && ME.role === 'admin' ? ' (change in Audit tab)' : ''));
+    fillHistFilters(j);
     hb.innerHTML = rows.length ? rows.map(h=>'<tr data-id="'+h.id+'"><td>'+h.id+'</td><td>'
       + new Date(h.ts).toLocaleString() + '</td><td>'+esc(h.user||'')+'</td><td>'+esc(h.model||'')+'</td><td>'+esc(h.preset||'')+'</td><td class="'
       + (h.ok ? 'ok-t' : 'err-t') + '">'+h.status_code+'</td><td>'+fmtMs(h.latency_ms)+'</td><td>'+fmtMs(h.load_ms)+'</td><td>'+fmtMs(h.eval_ms)+'</td><td>'
@@ -1174,10 +1205,91 @@ async function showDetail(id){
   }catch(e){ showErr('send-err', 'Could not load #' + id + ': ' + e.message); }
 }
 
+function fillHistFilters(j){
+  try{
+    const rows = j.history || [];
+    const models = [...new Set(rows.map(r=>r.model).filter(Boolean))].sort();
+    const presets = [...new Set(rows.map(r=>r.preset).filter(Boolean))].sort();
+    const users = [...new Set(rows.map(r=>r.user).filter(Boolean))].sort();
+    const ms = document.getElementById('hist-model');
+    const cur_m = ms.value;
+    ms.innerHTML = '<option value="">model: all</option>' + models.map(m=>'<option>'+esc(m)+'</option>').join('');
+    if (models.includes(cur_m)) ms.value = cur_m;
+    const ps = document.getElementById('hist-preset');
+    const cur_p = ps.value;
+    ps.innerHTML = '<option value="">preset: all</option>' + presets.map(m=>'<option>'+esc(m)+'</option>').join('');
+    if (presets.includes(cur_p)) ps.value = cur_p;
+    const us = document.getElementById('hist-user');
+    if (ME && ME.role === 'admin'){
+      us.style.display = '';
+      const cur_u = us.value;
+      us.innerHTML = '<option value="">user: all</option>' + users.map(m=>'<option>'+esc(m)+'</option>').join('');
+      if (users.includes(cur_u)) us.value = cur_u;
+    } else {
+      us.style.display = 'none';
+    }
+  }catch(e){}
+}
+
 async function clearHistory(){
   if (!confirm('Delete all logged requests?')) return;
   await authFetch('/api/history', {method: 'DELETE'});
   refreshAll(false);
+}
+
+async function loadRetention(){
+  if (ME && ME.role !== 'admin') return;
+  try{
+    const r = await authFetch('/api/retention');
+    const j = await r.json();
+    if (!j.ok) return;
+    const rt = j.retention || {};
+    const set = (id, v)=>{ const el = document.getElementById(id); if (el && !el.value) el.placeholder = String(v ?? ''); };
+    set('ret-log-days', rt.log_retention_days);
+    set('ret-log-rows', rt.log_retention_max_rows);
+    set('ret-audit-days', rt.audit_retention_days);
+    set('ret-audit-rows', rt.audit_retention_max_rows);
+    const ct = j.counts || {};
+    setText('audit-retention', 'now: ' + (ct.requests ?? '?') + ' log + ' + (ct.audit ?? '?')
+      + ' audit rows · db ' + fmtBytes(ct.db_bytes)
+      + ' · oldest log ' + (ct.oldest_request ? new Date(ct.oldest_request).toLocaleDateString() : '—')
+      + ' · oldest audit ' + (ct.oldest_audit ? new Date(ct.oldest_audit).toLocaleDateString() : '—'));
+  }catch(e){}
+}
+
+async function saveRetention(){
+  const payload = {};
+  const grab = (id, key)=>{
+    const v = document.getElementById(id).value.trim();
+    if (v !== '') payload[key] = Number(v);
+  };
+  grab('ret-log-days', 'log_retention_days');
+  grab('ret-log-rows', 'log_retention_max_rows');
+  grab('ret-audit-days', 'audit_retention_days');
+  grab('ret-audit-rows', 'audit_retention_max_rows');
+  setText('ret-msg', 'saving…');
+  try{
+    const r = await authFetch('/api/retention', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)});
+    const j = await r.json();
+    if (!j.ok){ setText('ret-msg', 'error: ' + (j.error || r.status)); return; }
+    const p = j.pruned || {};
+    setText('ret-msg', 'saved ✓ pruned '
+      + ((p.requests || {}).pruned || 0) + ' log + ' + ((p.audit || {}).pruned || 0) + ' audit rows');
+    ['ret-log-days','ret-log-rows','ret-audit-days','ret-audit-rows'].forEach(id=>{ document.getElementById(id).value = ''; });
+    loadRetention(); refreshAuditStats(); loadHistory();
+  }catch(e){ setText('ret-msg', 'error: ' + e.message); }
+}
+
+async function pruneNow(){
+  setText('ret-msg', 'pruning…');
+  try{
+    const r = await authFetch('/api/retention/prune', {method: 'POST'});
+    const j = await r.json();
+    setText('ret-msg', 'pruned ' + ((j.requests || {}).pruned || 0) + ' log + '
+      + ((j.audit || {}).pruned || 0) + ' audit rows ✓');
+    loadRetention(); refreshAuditStats(); loadHistory();
+  }catch(e){ setText('ret-msg', 'error: ' + e.message); }
 }
 
 function refreshAll(withHealth){

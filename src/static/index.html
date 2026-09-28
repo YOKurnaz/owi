@@ -252,10 +252,35 @@
 <section class="panel wide">
   <h2>Request log <span class="sub">sqlite · click a row to load it into Decide</span>
     <button class="danger" onclick="clearHistory()">Clear</button></h2>
+  <div class="row">
+    <input id="hist-q" spellcheck="false" placeholder="search state / questions / answers / error…" oninput="loadHistoryDebounced()" style="min-width:280px"/>
+    <select id="hist-model" onchange="loadHistory()"><option value="">model: all</option></select>
+    <select id="hist-preset" onchange="loadHistory()"><option value="">preset: all</option></select>
+    <select id="hist-user" onchange="loadHistory()" style="display:none"><option value="">user: all</option></select>
+    <select id="hist-status" onchange="loadHistory()">
+      <option value="">status: all</option>
+      <option value="ok">ok</option>
+      <option value="error">errors</option>
+    </select>
+    <select id="hist-days" onchange="loadHistory()">
+      <option value="0">any time</option>
+      <option value="1">last 24h</option>
+      <option value="7">last 7d</option>
+      <option value="30">last 30d</option>
+    </select>
+    <select id="hist-limit" onchange="loadHistory()">
+      <option value="40">40</option>
+      <option value="100">100</option>
+      <option value="250">250</option>
+      <option value="500">500</option>
+    </select>
+    <span id="hist-count" class="muted"></span>
+  </div>
   <div class="table-wrap tall"><table>
     <thead><tr><th>#</th><th>Time</th><th>User</th><th>Model</th><th>Preset</th><th>Status</th><th>Total</th><th>Load</th><th>Eval</th><th>Summary</th></tr></thead>
     <tbody id="hist-body"><tr><td colspan="10" class="muted">Loading…</td></tr></tbody>
   </table></div>
+  <div class="muted" style="font-size:11px;margin-top:6px" id="hist-retention"></div>
 </section>
 </div>
 
@@ -329,6 +354,16 @@
       <div class="card"><div class="k">Events</div><div id="a-total" class="v">—</div><div id="a-24" class="bar-sub">—</div></div>
       <div class="card"><div class="k">Denied</div><div id="a-denied" class="v">—</div><div class="bar-sub">401/403 attempts</div></div>
       <div class="card"><div class="k">Top user</div><div id="a-topuser" class="v small">—</div><div id="a-toproute" class="bar-sub">—</div></div>
+    </div>
+    <div class="muted" style="font-size:11px" id="audit-retention"></div>
+    <div class="row" style="margin-top:6px">
+      <label style="min-width:150px">Log keep (days) <input id="ret-log-days" spellcheck="false" placeholder="30" style="max-width:90px"/></label>
+      <label style="min-width:150px">Log max rows <input id="ret-log-rows" spellcheck="false" placeholder="10000" style="max-width:90px"/></label>
+      <label style="min-width:150px">Audit keep (days) <input id="ret-audit-days" spellcheck="false" placeholder="90" style="max-width:90px"/></label>
+      <label style="min-width:150px">Audit max rows <input id="ret-audit-rows" spellcheck="false" placeholder="20000" style="max-width:90px"/></label>
+      <button class="primary" onclick="saveRetention()">Save + prune</button>
+      <button onclick="pruneNow()">Prune now</button>
+      <span id="ret-msg" class="muted"></span>
     </div>
     <div class="row">
       <select id="audit-user" onchange="refreshAudit()"><option value="">user: all</option></select>
@@ -452,6 +487,12 @@ curl -s -b jar -X POST $B/api/users -d '{"username":"ops","password":"...","role
 
 # history + stats (scoped to caller unless admin)
 curl -s "$B/api/history?limit=30" | python3 -m json.tool
+curl -s "$B/api/history?q=refund&model=laya&status=ok&days=7&limit=100" | python3 -m json.tool
+
+# retention (admin): days + max rows per table (0 = unlimited), prunes immediately
+curl -s $B/api/retention | python3 -m json.tool
+curl -s -X POST $B/api/retention -d '{"log_retention_days":30,"audit_retention_days":90}'
+curl -s -X POST $B/api/retention/prune | python3 -m json.tool
 curl -s $B/api/history/123 | python3 -m json.tool
 curl -s $B/api/metrics | python3 -m json.tool</pre>
 </section>

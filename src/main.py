@@ -215,6 +215,100 @@ def max_loaded_models():
     return FALLBACK_MAX_LOADED
 
 
+FALLBACK_RETENTION_DAYS = 30
+FALLBACK_RETENTION_MAX_ROWS = 10000
+
+
+def _retention_int(key, env_key, yaml_key, default, minimum=0):
+    for raw in (get_setting(key, None), os.environ.get(env_key, ""),
+                str((load_yaml_config().get(yaml_key) or ""))):
+        try:
+            s = str(raw or "").strip()
+            if not s:
+                continue
+            n = int(s)
+            if n >= minimum:
+                return n
+        except Exception:
+            continue
+    return default
+
+
+def retention_days(table):
+    if table == "audit":
+        return _retention_int("audit_retention_days", "OWI_AUDIT_RETENTION_DAYS",
+                              "audit_retention_days", FALLBACK_RETENTION_DAYS)
+    return _retention_int("log_retention_days", "OWI_LOG_RETENTION_DAYS",
+                          "log_retention_days", FALLBACK_RETENTION_DAYS)
+
+
+def retention_max_rows(table):
+    if table == "audit":
+        return _retention_int("audit_retention_max_rows", "OWI_AUDIT_RETENTION_MAX_ROWS",
+                              "audit_retention_max_rows", FALLBACK_RETENTION_MAX_ROWS)
+    return _retention_int("log_retention_max_rows", "OWI_LOG_RETENTION_MAX_ROWS",
+                          "log_retention_max_rows", FALLBACK_RETENTION_MAX_ROWS)
+
+
+def retention_config():
+    return {"log_retention_days": retention_days("requests"),
+            "log_retention_max_rows": retention_max_rows("requests"),
+            "audit_retention_days": retention_days("audit"),
+            "audit_retention_max_rows": retention_max_rows("audit")}
+
+
+def prune_table(table, days=None, max_rows=None):
+    days = retention_days(table) if days is None else days
+    max_rows = retention_max_rows(table) if max_rows is None else max_rows
+    out = {"days": days, "max_rows": max_rows, "by_age": 0, "by_count": 0}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        if days > 0:
+            cur = conn.execute(
+                f"DELETE FROM {table} WHERE ts < datetime('now', ?)",
+                (f"-{int(days)} days",))
+            out["by_age"] = cur.rowcount or 0
+        if max_rows > 0:
+            cur = conn.execute(f"SELECT COUNT(*) FROM {table}")
+            total = cur.fetchone()[0] or 0
+            if total > max_rows:
+                conn.execute(
+                    f"DELETE FROM {table} WHERE id NOT IN"
+                    f" (SELECT id FROM {table} ORDER BY id DESC LIMIT ?)",
+                    (int(max_rows),))
+                out["by_count"] = total - max_rows
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+    out["pruned"] = out["by_age"] + out["by_count"]
+    return out
+
+
+def prune_all():
+    return {"requests": prune_table("requests"), "audit": prune_table("audit")}
+
+
+def table_counts():
+    try:
+        conn = _db()
+        n_req = conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0]
+        n_audit = conn.execute("SELECT COUNT(*) FROM audit").fetchone()[0]
+        oldest_req = conn.execute("SELECT MIN(ts) FROM requests").fetchone()[0]
+        oldest_audit = conn.execute("SELECT MIN(ts) FROM audit").fetchone()[0]
+        conn.close()
+        try:
+            size = os.path.getsize(DB_PATH)
+        except Exception:
+            size = 0
+        return {"requests": n_req, "audit": n_audit,
+                "oldest_request": oldest_req, "oldest_audit": oldest_audit,
+                "db_bytes": size}
+    except Exception:
+        return {"requests": 0, "audit": 0, "oldest_request": None,
+                "oldest_audit": None, "db_bytes": 0}
+
+
 def _norm_name(n):
     n = str(n or "").strip()
     if not n:
@@ -1099,12 +1193,14 @@ ROUTE_MAP = [
      "auth": "login"},
     {"method": "POST", "path": "/api/mcp/read", "doc": "read an mcp resource",
      "auth": "login", "example": {"uri": "ollaya://presets/triage"}},
-    {"method": "GET", "path": "/api/history", "doc": "?limit=30 logged requests",
-     "auth": "login", "params": {"limit": "1-200"}},
+    {"method": "GET", "path": "/api/history", "doc": "logged requests (?limit,q,model,preset,user,status,days)",
+     "auth": "login", "params": {"limit": "1-500", "q": "full-text search",
+                "model": "exact model", "preset": "exact preset",
+                "user": "admin only", "status": "ok|error", "days": "last N days"}},
     {"method": "GET", "path": "/api/history/{id}", "doc": "full logged request",
      "auth": "login", "params": {"id": "request id"}},
-    {"method": "DELETE", "path": "/api/history", "doc": "clear log",
-     "auth": "admin"},
+    {"method": "DELETE", "path": "/api/history", "doc": "clear log (?older_than_days=N)",
+     "auth": "admin", "params": {"older_than_days": "delete only rows older than N days"}},
     {"method": "GET", "path": "/api/audit",
      "doc": "management audit trail (?limit, ?user, ?path, ?status=ok|denied|error)",
      "auth": "admin",
@@ -1112,8 +1208,17 @@ ROUTE_MAP = [
                 "path": "path substring", "status": "ok|denied|error"}},
     {"method": "GET", "path": "/api/audit/stats", "doc": "audit totals + per-user/per-route",
      "auth": "admin"},
-    {"method": "DELETE", "path": "/api/audit", "doc": "clear audit trail",
-     "auth": "admin"},
+    {"method": "DELETE", "path": "/api/audit", "doc": "clear audit trail (?older_than_days=N)",
+     "auth": "admin", "params": {"older_than_days": "delete only rows older than N days"}},
+    {"method": "GET", "path": "/api/retention",
+     "doc": "retention settings + table counts", "auth": "admin"},
+    {"method": "POST", "path": "/api/retention",
+     "doc": "set log/audit retention days + max rows (0 = unlimited); prunes now",
+     "auth": "admin",
+     "example": {"log_retention_days": 30, "log_retention_max_rows": 10000,
+                 "audit_retention_days": 90, "audit_retention_max_rows": 20000}},
+    {"method": "POST", "path": "/api/retention/prune",
+     "doc": "run retention prune now", "auth": "admin"},
     {"method": "GET", "path": "/api/metrics",
      "doc": "perf: totals, per-model, per-preset, per-day, health 24h",
      "auth": "login"},
@@ -2339,27 +2444,56 @@ async def keys_delete(kid: int, req: Request):
 # ---------------- API: history + metrics ----------------
 
 @app.get("/api/history")
-def history(limit: int = 30, req: Request = None):
+def history(limit: int = 30, req: Request = None, q: str = "", model: str = "",
+            preset: str = "", user: str = "", status: str = "", days: int = 0):
     redir, a = need_login(req)
     if redir is not None:
         return redir
     admin = a["user"]["role"] == "admin"
     me = a["user"]["username"]
-    limit = max(1, min(int(limit), 200))
+    limit = max(1, min(int(limit or 30), 500))
+    conds, args = [], []
+    if not admin:
+        conds.append("user=?")
+        args.append(me)
+    elif user:
+        conds.append("user=?")
+        args.append(user)
+    if model:
+        conds.append("model=?")
+        args.append(model)
+    if preset:
+        conds.append("preset=?")
+        args.append(preset)
+    if status == "ok":
+        conds.append("ok=1")
+    elif status == "error":
+        conds.append("ok=0")
+    if days and int(days) > 0:
+        conds.append("ts > datetime('now', ?)")
+        args.append(f"-{int(days)} days")
+    if q:
+        like = "%" + q + "%"
+        conds.append("(state_json LIKE ? OR questions_json LIKE ?"
+                     " OR response_json LIKE ? OR error LIKE ?"
+                     " OR model LIKE ? OR answered_by LIKE ?)")
+        args.extend([like] * 6)
+    qsel = ("SELECT id, ts, client_ip, user, model, preset, path, status_code, ok, latency_ms,"
+            " load_ms, eval_ms, answered_by, substr(state_json,1,300) AS state_ex,"
+            " substr(response_json,1,800) AS resp_ex,"
+            " error, tokens_in, tokens_out FROM requests")
+    if conds:
+        qsel += " WHERE " + " AND ".join(conds)
+    qsel += " ORDER BY id DESC LIMIT ?"
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    q = ("SELECT id, ts, client_ip, user, model, preset, path, status_code, ok, latency_ms,"
-         " load_ms, eval_ms, answered_by, substr(state_json,1,300) AS state_ex,"
-         " substr(response_json,1,800) AS resp_ex,"
-         " error, tokens_in, tokens_out FROM requests")
-    args = ()
-    if not admin:
-        q += " WHERE user=?"
-        args = (me,)
-    q += " ORDER BY id DESC LIMIT ?"
-    rows = conn.execute(q, args + (limit,)).fetchall()
+    rows = conn.execute(qsel, args + [limit]).fetchall()
+    total = conn.execute(
+        "SELECT COUNT(*) FROM requests" + (" WHERE " + " AND ".join(conds) if conds else ""),
+        args).fetchone()[0]
     conn.close()
-    return {"history": [dict(r) for r in rows]}
+    return {"history": [dict(r) for r in rows], "total_match": total,
+            "retention": retention_config(), "counts": table_counts()}
 
 
 @app.get("/api/history/{rid}")
@@ -2385,10 +2519,18 @@ def history_one(rid: int, req: Request = None):
 
 
 @app.delete("/api/history")
-def history_clear(req: Request = None):
+def history_clear(req: Request = None, older_than_days: int = 0):
     redir, a = need_admin(req)
     if redir is not None:
         return redir
+    if older_than_days and int(older_than_days) > 0:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.execute("DELETE FROM requests WHERE ts < datetime('now', ?)",
+                           (f"-{int(older_than_days)} days",))
+        n = cur.rowcount or 0
+        conn.commit()
+        conn.close()
+        return {"ok": True, "deleted": n}
     conn = sqlite3.connect(DB_PATH)
     conn.execute("DELETE FROM requests")
     conn.commit()
@@ -2455,15 +2597,76 @@ def audit_stats(req: Request = None):
 
 
 @app.delete("/api/audit")
-def audit_clear(req: Request = None):
+def audit_clear(req: Request = None, older_than_days: int = 0):
     redir, a = need_admin(req)
     if redir is not None:
         return redir
+    if older_than_days and int(older_than_days) > 0:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.execute("DELETE FROM audit WHERE ts < datetime('now', ?)",
+                           (f"-{int(older_than_days)} days",))
+        n = cur.rowcount or 0
+        conn.commit()
+        conn.close()
+        return {"ok": True, "deleted": n}
     conn = sqlite3.connect(DB_PATH)
     conn.execute("DELETE FROM audit")
     conn.commit()
     conn.close()
     return {"ok": True}
+
+
+# ---------------- API: retention (admin only) ----------------
+
+@app.get("/api/retention")
+def retention_get(req: Request = None):
+    redir, a = need_admin(req)
+    if redir is not None:
+        return redir
+    return {"ok": True, "retention": retention_config(), "counts": table_counts()}
+
+
+@app.post("/api/retention")
+async def retention_set(req: Request):
+    redir, a = need_admin(req)
+    if redir is not None:
+        return redir
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
+    out = {}
+    for key in ("log_retention_days", "log_retention_max_rows",
+                "audit_retention_days", "audit_retention_max_rows"):
+        if key in body:
+            try:
+                n = int(body[key])
+            except Exception:
+                return JSONResponse({"ok": False, "error": f"{key} must be an integer >= 0"}, status_code=400)
+            if n < 0:
+                return JSONResponse({"ok": False, "error": f"{key} must be >= 0 (0 = keep forever / no cap)"}, status_code=400)
+            if "max_rows" in key and n > 0 and n < 100:
+                return JSONResponse({"ok": False, "error": f"{key} must be 0 or >= 100"}, status_code=400)
+            set_setting(key, str(n))
+            out[key] = n
+    if not out:
+        return JSONResponse({"ok": False, "error": "nothing to update"}, status_code=400)
+    out["pruned"] = prune_all()
+    out["retention"] = retention_config()
+    out["counts"] = table_counts()
+    out["ok"] = True
+    return out
+
+
+@app.post("/api/retention/prune")
+async def retention_prune(req: Request):
+    redir, a = need_admin(req)
+    if redir is not None:
+        return redir
+    res = prune_all()
+    res["ok"] = True
+    res["counts"] = table_counts()
+    return res
 
 
 def _pct(vals, p):
@@ -2572,6 +2775,10 @@ async def _health_loop():
         await asyncio.to_thread(ensure_default_loaded)
     except Exception:
         pass
+    try:
+        await asyncio.to_thread(prune_all)
+    except Exception:
+        pass
     while True:
         try:
             cfg = load_yaml_config()
@@ -2581,6 +2788,7 @@ async def _health_loop():
             if _port_open(mcp_addr()):
                 m = await asyncio.to_thread(check_mcp)
                 record_health("mcp_health", m["ok"], m["latency_ms"], 0, m.get("detail", ""))
+            await asyncio.to_thread(prune_all)
         except Exception:
             pass
             interval = 60

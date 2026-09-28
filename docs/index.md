@@ -21,7 +21,7 @@ and its **MCP server** (`ollaya mcp --http`).
 - **Users & security** — session login for the UI, bearer API keys for
   scripts, `admin` / `user` roles; per-user history and metrics scoping.
 - **Performance & log** — totals, p50/p95, per-model/per-preset/per-day,
-  health history, click-to-reload request log.
+  health history, searchable log with retention.
 - **Full API** — everything the UI does is a `GET/POST /api/*` call.
 
 ## Contents
@@ -101,7 +101,7 @@ MCP notes) in the [README](https://github.com/YOKurnaz/owi#docker-build-the-imag
 
 ![OWI — Performance tab](tab-performance.png)
 
-### Request log — per-user rows, click to reload into Decide
+### Request log — search, filters, retention
 
 ![OWI — Log tab](tab-log.png)
 

@@ -9,3 +9,10 @@ default_model: laya:latest
 max_loaded_models: 2
 # Background Ollaya health probe interval (seconds, 20-600).
 health_interval_s: 60
+# Retention: rows older than N days are pruned (0 = keep forever),
+# and tables are capped at N newest rows (0 = no cap).
+# UI settings (sqlite) > OWI_LOG_RETENTION_* / OWI_AUDIT_RETENTION_* env > this file.
+log_retention_days: 30
+log_retention_max_rows: 10000
+audit_retention_days: 90
+audit_retention_max_rows: 20000

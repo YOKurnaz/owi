@@ -36,7 +36,9 @@ and its **MCP server** (`ollaya mcp --http`).
   scripts, `admin` / `user` roles. Admins manage users; users manage their
   own profile + keys. History and metrics are scoped per user.
 - **Performance & log** — totals, p50/p95, per-model/per-preset/per-day,
-  Ollaya + MCP health history, click-to-reload sqlite request log.
+  Ollaya + MCP health history, searchable sqlite request log
+  (full-text + model/preset/user/status/time filters) with retention
+  (keep-N-days + max-rows cap, pruned automatically).
 - **Full API** — everything the UI does is a `GET/POST /api/*` call
   (route map at `GET /api`, curl examples in the UI's API tab).
 
@@ -52,7 +54,7 @@ Decide tab (above) plus the other main views:
 
 ![OWI — Performance tab: metrics and health history](docs/tab-performance.png)
 
-### Request log — per-user rows, click to reload into Decide
+### Request log — search, filters, retention
 
 ![OWI — Log tab: scoped request history](docs/tab-log.png)
 
