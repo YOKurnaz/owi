@@ -67,15 +67,68 @@ journalctl --user -u ollaya-webui -f
 See [`systemd/README.md`](systemd/README.md) for details
 (`KillMode=process` keeps a managed MCP child alive across restarts).
 
-### Docker (prepared, not the default yet)
+### Docker (build the image yourself, step by step)
 
-`Dockerfile` + `compose.yaml` are ready for the later move
-(webui + Ollaya in one image/stack):
+The image holds the OWI web UI only — Ollaya itself keeps running on the
+host (or wherever `OLLAYA_BASE_URL` points). Steps:
 
 ```bash
+git clone https://github.com/YOKurnaz/owi.git
+cd owi
+
+# 1. Build the image (name it what you like)
+docker build -t ollaya-webui:latest .
+
+# 2. Prepare local dirs (config ships a default yaml; sqlite db, logs and
+# saved settings live in ./data and survive image updates)
+mkdir -p data config
+
+# 3a. Easiest: compose (port, env, volumes, host-gateway all set).
+# NOTE: compose as shipped assumes Ollaya is reachable at
+# host.docker.internal:11435 — but Ollaya binds loopback by default
+# (see Notes), so prefer --network host (3b) on the same machine,
+# or give Ollaya a non-loopback bind first (option B in Notes).
 docker compose up -d --build
-# UI: http://<HOST-IP>:11524
+docker compose logs -f ollaya-webui   # Ctrl-C to detach
+# UI: http://<HOST-IP>:11524 (first login: admin / admin)
+
+# 3b. Or plain docker run (same thing, explicit). NOTE: with
+# --network host the image's baked-in :11524 would clash with a
+# bare-metal OWI on the same host — override the command's port:
+docker run -d --name ollaya-webui --restart unless-stopped --network host \
+  -e OWI_CONFIG=/config/ollaya-webui.yaml \
+  -e OWI_DB=/data/owi.db \
+  -e OLLAYA_BASE_URL=http://127.0.0.1:11435 \
+  -v ./config:/config:ro \
+  -v ./data:/data \
+  ollaya-webui:latest \
+  sh -c "OWI_PORT=11599 exec uvicorn main:app --host 0.0.0.0 --port 11599"
+# UI: http://<HOST-IP>:11599
 ```
+
+Notes:
+
+- Ollaya listens on loopback (`127.0.0.1:11435`) by default, so a container
+  reaching it via `host.docker.internal` gets **connection refused** — the
+  host gateway (e.g. `172.17.0.1`) is not loopback. Two ways around it:
+  - **A (simplest, same host):** run the container with host networking
+    (`docker run --network host ...`, drop `-p`/`--add-host`), then
+    `OLLAYA_BASE_URL=http://127.0.0.1:11435` works from inside.
+  - **B (keep bridge networking):** make Ollaya listen off-loopback, e.g.
+    `sudo systemctl edit ollaya` with
+    `Environment="OLLAYA_HOST=0.0.0.0:11435"` (+ `OLLAYA_API_KEY=...`, since
+    it warns when exposed without a key), then `host.docker.internal`
+    works as written. If Ollaya runs on another machine, set
+    `OLLAYA_BASE_URL=http://<that-host>:11435` instead.
+- If Ollaya needs a key (`OLLAYA_API_KEY` set server-side), pass the same
+  value as `-e OLLAYA_API_KEY=...` or save it in the UI header.
+- MCP start/stop from the UI only works in bare-metal mode (the container
+  has no `ollaya` binary). Point `OLLAYA_MCP_ADDR` at a host MCP server
+  that is already listening, or leave MCP stopped.
+- SQLite db, request log and saved settings live in `./data` (a volume),
+  so `docker compose pull && docker compose up -d --build` keeps everything.
+- Health: the image probes `GET /login` (public); all `/api/*` need login.
+  Rebuild after code changes: `docker compose up -d --build`.
 
 ## Configuration
 
@@ -147,6 +200,6 @@ owi/
   systemd/                  # example systemd user unit
   config/ollaya-webui.yaml  # fallback config (UI settings win)
   data/                     # sqlite db (owi.db), mcp.log, webui.log (gitignored)
-  docs/                     # this site (GitHub Pages)
-  Dockerfile / compose.yaml # prepared for the later docker move
+  docs/                     # GitHub Pages site (screenshot + install steps)
+  Dockerfile / compose.yaml # OWI web-UI image (Ollaya stays on the host)
 ```

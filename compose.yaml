@@ -1,4 +1,5 @@
-# Prepared for the later docker move. NOT used yet.
+# Standalone OWI stack: UI container + Ollaya on the host.
+# (A future all-in-one image with Ollaya inside is a separate step.)
 services:
   ollaya-webui:
     build: .
@@ -10,8 +11,12 @@ services:
     environment:
       - OWI_CONFIG=/config/ollaya-webui.yaml
       - OWI_DB=/data/owi.db
+      # Ollaya on the host. host.docker.internal resolves via extra_hosts below.
       - OLLAYA_BASE_URL=http://host.docker.internal:11435
-      - OLLAYA_MCP_ADDR=127.0.0.1:11436
+      - OLLAYA_API_KEY=
+      # MCP runs on the HOST (OWI starts `ollaya mcp` there only in bare-metal
+      # mode). Point at a host MCP address only if one is already listening.
+      - OLLAYA_MCP_ADDR=host.docker.internal:11436
       - OWI_TIMEOUT_S=300
     volumes:
       - ./config:/config:ro

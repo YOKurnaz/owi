@@ -50,12 +50,19 @@ systemctl --user enable --now ollaya-webui
 # UI: http://<HOST-IP>:11524
 ```
 
-**Docker** (prepared for the later move):
+**Docker** — build the image yourself:
 
 ```bash
+git clone https://github.com/YOKurnaz/owi.git
+cd owi
+docker build -t ollaya-webui:latest .
+mkdir -p data config
 docker compose up -d --build
-# UI: http://<HOST-IP>:11524
+# UI: http://<HOST-IP>:11524 (first login: admin / admin)
 ```
+
+Step-by-step (plain `docker run`, volumes, `host.docker.internal`,
+MCP notes) in the [README](https://github.com/YOKurnaz/owi#docker-build-the-image-yourself-step-by-step).
 
 ## Quick API taste
 
