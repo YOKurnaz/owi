@@ -1,5 +1,7 @@
+import csv
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
@@ -18,7 +20,7 @@ from datetime import datetime, timezone
 import requests
 import yaml
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 APP_VERSION = "0.1.0"
@@ -1208,6 +1210,11 @@ ROUTE_MAP = [
                 "path": "path substring", "status": "ok|denied|error"}},
     {"method": "GET", "path": "/api/audit/stats", "doc": "audit totals + per-user/per-route",
      "auth": "admin"},
+    {"method": "GET", "path": "/api/audit/export",
+     "doc": "download filtered audit as CSV (?user,?path,?status,?limit<=50000)",
+     "auth": "admin",
+     "params": {"user": "username filter", "path": "path substring",
+                "status": "ok|denied|error", "limit": "rows, default 5000"}},
     {"method": "DELETE", "path": "/api/audit", "doc": "clear audit trail (?older_than_days=N)",
      "auth": "admin", "params": {"older_than_days": "delete only rows older than N days"}},
     {"method": "GET", "path": "/api/retention",
@@ -2540,13 +2547,7 @@ def history_clear(req: Request = None, older_than_days: int = 0):
 
 # ---------------- API: audit (admin only) ----------------
 
-@app.get("/api/audit")
-def audit_list(req: Request = None, limit: int = 100, user: str = "",
-               path: str = "", status: str = ""):
-    redir, a = need_admin(req)
-    if redir is not None:
-        return redir
-    limit = max(1, min(int(limit or 100), 500))
+def _audit_filter_clauses(user, path, status):
     conds, args = [], []
     if user:
         conds.append("user=?")
@@ -2560,6 +2561,17 @@ def audit_list(req: Request = None, limit: int = 100, user: str = "",
         conds.append("status_code IN (401,403)")
     elif status == "error":
         conds.append("(status_code >= 400 AND status_code NOT IN (401,403))")
+    return conds, args
+
+
+@app.get("/api/audit")
+def audit_list(req: Request = None, limit: int = 100, user: str = "",
+               path: str = "", status: str = ""):
+    redir, a = need_admin(req)
+    if redir is not None:
+        return redir
+    limit = max(1, min(int(limit or 100), 500))
+    conds, args = _audit_filter_clauses(user, path, status)
     q = ("SELECT id, ts, user, via, client_ip, method, path, status_code,"
          " latency_ms, detail FROM audit")
     if conds:
@@ -2571,6 +2583,36 @@ def audit_list(req: Request = None, limit: int = 100, user: str = "",
         "SELECT DISTINCT user FROM audit ORDER BY user").fetchall()]
     conn.close()
     return {"ok": True, "audit": [dict(r) for r in rows], "users": users}
+
+
+@app.get("/api/audit/export")
+def audit_export(req: Request = None, user: str = "", path: str = "",
+                 status: str = "", limit: int = 5000):
+    redir, a = need_admin(req)
+    if redir is not None:
+        return redir
+    limit = max(1, min(int(limit or 5000), 50000))
+    conds, args = _audit_filter_clauses(user, path, status)
+    q = ("SELECT id, ts, user, via, client_ip, method, path, status_code,"
+         " latency_ms, detail FROM audit")
+    if conds:
+        q += " WHERE " + " AND ".join(conds)
+    q += " ORDER BY id DESC LIMIT ?"
+    conn = _db()
+    rows = conn.execute(q, args + [limit]).fetchall()
+    conn.close()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["id", "ts", "user", "via", "client_ip", "method", "path",
+                "status_code", "latency_ms", "detail"])
+    for r in rows:
+        w.writerow([r["id"], r["ts"], r["user"], r["via"], r["client_ip"],
+                    r["method"], r["path"], r["status_code"],
+                    r["latency_ms"], r["detail"]])
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return PlainTextResponse(
+        buf.getvalue(), media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="owi-audit-{stamp}.csv"'})
 
 
 @app.get("/api/audit/stats")

@@ -992,6 +992,22 @@ async function refreshAuditStats(){
   }catch(e){}
 }
 
+function exportAudit(){
+  const u = document.getElementById('audit-user').value || '';
+  const q = document.getElementById('audit-path').value.trim();
+  const st = document.getElementById('audit-status').value || '';
+  const qs = new URLSearchParams({limit: 5000});
+  if (u) qs.set('user', u);
+  if (q) qs.set('path', q);
+  if (st) qs.set('status', st);
+  const a = document.createElement('a');
+  a.href = '/api/audit/export?' + qs.toString();
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 async function clearAudit(){
   if (!confirm('Delete ALL audit events?')) return;
   try{
