@@ -53,7 +53,7 @@ docker run -d --name ollaya-webui --restart unless-stopped --network host \
   -e OWI_CONFIG=/config/ollaya-webui.yaml -e OWI_DB=/data/owi.db \
   -e OLLAYA_BASE_URL=http://127.0.0.1:11435 \
   -v ./config:/config:ro -v ./data:/data \
-  ghcr.io/yokurnaz/owi:0.1.0
+  ghcr.io/yokurnaz/owi:0.2.0
 # UI: http://<HOST-IP>:11524 (first login: admin / admin)
 ```
 
@@ -77,12 +77,12 @@ Or run as a service: see the
 
 ### Docker
 
-Prebuilt: `ghcr.io/yokurnaz/owi:0.1.0` (`docker pull` it to skip the build).
+Prebuilt: `ghcr.io/yokurnaz/owi:0.2.0` (`docker pull` it to skip the build).
 
 ```bash
 git clone https://github.com/YOKurnaz/owi.git
 cd owi
-docker build -t ollaya-webui:latest .   # or: docker pull ghcr.io/yokurnaz/owi:0.1.0
+docker build -t ollaya-webui:latest .   # or: docker pull ghcr.io/yokurnaz/owi:0.2.0
 mkdir -p data config
 docker compose up -d --build
 # UI: http://<HOST-IP>:11524 (first login: admin / admin)

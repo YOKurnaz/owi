@@ -103,7 +103,7 @@ docker run -d --name ollaya-webui --restart unless-stopped --network host \
   -e OLLAYA_BASE_URL=http://127.0.0.1:11435 \
   -v ./config:/config:ro \
   -v ./data:/data \
-  ghcr.io/yokurnaz/owi:0.1.0
+  ghcr.io/yokurnaz/owi:0.2.0
 # UI: http://<HOST-IP>:11524 (first login: admin / admin)
 ```
 
@@ -156,15 +156,15 @@ See [`systemd/README.md`](systemd/README.md) for details
 The image holds the OWI web UI only — Ollaya itself keeps running on the
 host (or wherever `OLLAYA_BASE_URL` points). Steps:
 
-Prebuilt image (each release): `ghcr.io/yokurnaz/owi:0.1.0`
-(or `:latest`). Skip to step 2 with `IMAGE=ghcr.io/yokurnaz/owi:0.1.0`.
+Prebuilt image (each release): `ghcr.io/yokurnaz/owi:0.2.0`
+(or `:latest`). Skip to step 2 with `IMAGE=ghcr.io/yokurnaz/owi:0.2.0`.
 
 ```bash
 git clone https://github.com/YOKurnaz/owi.git
 cd owi
 
 # 1. Build the image (name it what you like) — or pull the release image:
-# docker pull ghcr.io/yokurnaz/owi:0.1.0
+# docker pull ghcr.io/yokurnaz/owi:0.2.0
 docker build -t ollaya-webui:latest .
 
 # 2. Prepare local dirs (config ships a default yaml; sqlite db, logs and
