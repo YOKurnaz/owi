@@ -1806,12 +1806,11 @@ async def mcp_read(req: Request):
 @app.get("/api/auth/status")
 def auth_status(req: Request):
     a = auth_from_request(req)
-    conn = _db()
-    n = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    conn.close()
+    row = _get_user(BOOTSTRAP_USER)
+    still_default = bool(row) and _pw_check(BOOTSTRAP_PASS, row["pw_hash"] or "")
     return {"ok": True, "logged_in": bool(a.get("user")),
             "via": a.get("via"), "user": a.get("user"),
-            "bootstrap_default": (n == 1 and _get_user(BOOTSTRAP_USER) is not None)}
+            "bootstrap_default": still_default}
 
 
 @app.post("/api/auth/login")
