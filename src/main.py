@@ -967,13 +967,19 @@ ROUTE_MAP = [
 
 
 @app.get("/api")
-def api_map():
+def api_map(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     return {"service": APP_NAME, "version": APP_VERSION, "ollaya": ollaya_base_url(),
             "mcp": mcp_addr(), "routes": [{"method": m, "path": p, "doc": d} for m, p, d in ROUTE_MAP]}
 
 
 @app.get("/api/health")
-def health():
+def health(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     h = check_ollaya()
     m = check_mcp()
     st = mcp_status()
@@ -989,7 +995,10 @@ def health():
 
 
 @app.get("/api/settings")
-def read_settings():
+def read_settings(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     cfg = load_yaml_config()
     return {"ollaya_base_url": ollaya_base_url(), "mcp_addr": mcp_addr(),
             "has_api_key": bool(api_key()),
@@ -1002,7 +1011,10 @@ def read_settings():
 
 
 @app.get("/api/policy")
-def read_policy():
+def read_policy(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     loaded = _loaded_names()
     dm = default_model()
     return {"ok": True, "default_model": dm, "default_targets": default_targets(),
@@ -1103,7 +1115,10 @@ async def write_settings(req: Request):
 
 
 @app.get("/api/version")
-def version():
+def version(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     fwd = ollaya_request("GET", "/api/version", timeout=10)
     if fwd["error"]:
         return JSONResponse({"ok": False, "error": fwd["error"]}, status_code=502)
@@ -1397,7 +1412,10 @@ async def api_v1_decisions(req: Request):
 
 
 @app.get("/api/v1/models")
-def api_v1_models():
+def api_v1_models(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     fwd = ollaya_request("GET", "/v1/models", timeout=15)
     if fwd["error"]:
         return JSONResponse({"ok": False, "error": fwd["error"]}, status_code=502)
@@ -1407,7 +1425,10 @@ def api_v1_models():
 # ---------------- API: models ----------------
 
 @app.get("/api/models")
-def models_list():
+def models_list(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     fwd = ollaya_request("GET", "/api/tags", timeout=15)
     if fwd["error"]:
         return JSONResponse({"ok": False, "error": fwd["error"]}, status_code=502)
@@ -1417,7 +1438,10 @@ def models_list():
 
 
 @app.get("/api/models/running")
-def models_running():
+def models_running(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     fwd = ollaya_request("GET", "/api/ps", timeout=15)
     if fwd["error"]:
         return JSONResponse({"ok": False, "error": fwd["error"]}, status_code=502)
@@ -1620,14 +1644,20 @@ async def models_create(req: Request):
 # ---------------- API: presets ----------------
 
 @app.get("/api/presets")
-def presets_list():
+def presets_list(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     return {"presets": PRESET_NAMES,
             "states": PRESET_STATES,
             "mcp_live": _port_open(mcp_addr())}
 
 
 @app.get("/api/presets/{name}")
-def preset_get(name: str):
+def preset_get(name: str, req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     q = get_preset_questions(name)
     if q is None:
         return JSONResponse({"ok": False, "error": f"unknown preset '{name}'"}, status_code=404)
@@ -1639,7 +1669,10 @@ def preset_get(name: str):
 # ---------------- API: MCP ----------------
 
 @app.get("/api/mcp/status")
-def mcp_status_api():
+def mcp_status_api(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     return {"ok": True, **mcp_status()}
 
 
@@ -1669,14 +1702,20 @@ async def mcp_stop_api(req: Request):
 
 
 @app.get("/api/mcp/health")
-def mcp_health_api():
+def mcp_health_api(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     h = check_mcp()
     record_health("mcp_health", h["ok"], h["latency_ms"], 0, h.get("detail", ""))
     return h
 
 
 @app.get("/api/mcp/tools")
-def mcp_tools():
+def mcp_tools(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     r = mcp_rpc("tools/list", {}, timeout=15)
     if not r.get("ok"):
         return JSONResponse({"ok": False, "error": r.get("error"), "need_mcp": True}, status_code=502)
@@ -1734,7 +1773,10 @@ async def mcp_call(req: Request):
 
 
 @app.get("/api/mcp/resources")
-def mcp_resources():
+def mcp_resources(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
     r = mcp_rpc("resources/list", {}, timeout=15)
     if not r.get("ok"):
         return JSONResponse({"ok": False, "error": r.get("error"), "need_mcp": True}, status_code=502)

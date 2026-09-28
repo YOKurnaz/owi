@@ -62,7 +62,7 @@ async function loadPreset(){
       document.getElementById('questions').value = '{}';
       return;
     }
-    const r = await fetch('/api/presets/' + p);
+    const r = await authFetch('/api/presets/' + p);
     const j = await r.json();
     document.getElementById('questions').value = JSON.stringify(j.questions || {}, null, 2);
     document.getElementById('state').value = JSON.stringify(
@@ -110,7 +110,7 @@ function updateKaHint(){
 
 async function loadPolicy(){
   try{
-    const r = await fetch('/api/policy');
+    const r = await authFetch('/api/policy');
     const j = await r.json();
     if (j.default_model) DEFAULT_MODEL = j.default_model;
     if (j.max_loaded_models) MAX_LOADED = j.max_loaded_models;
@@ -136,7 +136,7 @@ async function savePolicy(){
   if (mx) payload.max_loaded_models = Number(mx);
   setText('policy-msg', 'saving…');
   try{
-    const r = await fetch('/api/policy', {method:'POST', headers:{'Content-Type':'application/json'},
+    const r = await authFetch('/api/policy', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(payload)});
     const j = await r.json();
     if (!j.ok){ setText('policy-msg', 'error: ' + (j.error || r.status)); return; }
@@ -151,7 +151,7 @@ async function savePolicy(){
 async function ensureDefault(){
   setText('policy-msg', 'loading default…');
   try{
-    const r = await fetch('/api/models/load', {method:'POST', headers:{'Content-Type':'application/json'},
+    const r = await authFetch('/api/models/load', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({model: DEFAULT_MODEL, keep_alive: -1})});
     const j = await r.json();
     setText('policy-msg', j.ok ? DEFAULT_MODEL + ' loaded ✓' : 'error: ' + (j.error || r.status));
@@ -162,7 +162,7 @@ async function ensureDefault(){
 async function enforcePolicy(){
   setText('policy-msg', 'enforcing…');
   try{
-    const r = await fetch('/api/policy', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    const r = await authFetch('/api/policy', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
     const j = await r.json();
     setText('policy-msg', 'max ' + MAX_LOADED + ' ✓'
       + (j.enforce_unloaded && j.enforce_unloaded.length ? ' · evicted ' + j.enforce_unloaded.join(', ') : ' · nothing to evict'));
@@ -194,7 +194,7 @@ async function send(){
   btn.disabled = true; btn.textContent = '⏳ Deciding…';
   document.getElementById('resp-meta').textContent = 'sending…';
   try{
-    const r = await fetch('/api/decide', {
+    const r = await authFetch('/api/decide', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload)
     });
@@ -274,7 +274,7 @@ function renderDecide(j, httpStatus){
 
 async function refreshModels(){
   try{
-    const r = await fetch('/api/models');
+    const r = await authFetch('/api/models');
     const j = await r.json();
     if (j.default_model) DEFAULT_MODEL = j.default_model;
     if (j.max_loaded_models) MAX_LOADED = j.max_loaded_models;
@@ -326,7 +326,7 @@ async function setDefaultModel(m){
 
 async function refreshRunning(){
   try{
-    const r = await fetch('/api/models/running');
+    const r = await authFetch('/api/models/running');
     const j = await r.json();
     if (j.default_model) DEFAULT_MODEL = j.default_model;
     if (j.max_loaded_models) MAX_LOADED = j.max_loaded_models;
@@ -352,7 +352,7 @@ async function loadModel(fromDecide){
 async function loadModelName(m){
   setText('pull-msg', 'loading ' + m + '…');
   try{
-    const r = await fetch('/api/models/load', {method:'POST', headers:{'Content-Type':'application/json'},
+    const r = await authFetch('/api/models/load', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({model: m, keep_alive: -1})});
     const j = await r.json();
     setText('pull-msg', j.ok ? m + ' loaded ✓ (' + fmtMs(j.latency_ms) + ')' : 'error: ' + (j.error || JSON.stringify(j.response).slice(0,200)));
@@ -361,7 +361,7 @@ async function loadModelName(m){
 }
 async function unloadModel(m){
   try{
-    await fetch('/api/models/unload', {method:'POST', headers:{'Content-Type':'application/json'},
+    await authFetch('/api/models/unload', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({model: m})});
     refreshRunning(); refreshModels();
   }catch(e){}
@@ -369,7 +369,7 @@ async function unloadModel(m){
 async function deleteModel(m){
   if (!confirm('Delete model ' + m + '?')) return;
   try{
-    const r = await fetch('/api/models', {method:'DELETE', headers:{'Content-Type':'application/json'},
+    const r = await authFetch('/api/models', {method:'DELETE', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({model: m})});
     const j = await r.json();
     if (!j.ok) alert('Delete failed: ' + (j.error || r.status));
@@ -382,7 +382,7 @@ async function pullModel(){
   const msg = document.getElementById('pull-msg');
   msg.textContent = 'pulling ' + m + '… (large models take a while)';
   try{
-    const r = await fetch('/api/models/pull', {method:'POST', headers:{'Content-Type':'application/json'},
+    const r = await authFetch('/api/models/pull', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({model: m})});
     const j = await r.json();
     msg.textContent = j.ok ? m + ' pulled ✓ (' + fmtMs(j.latency_ms) + ')' : 'error: ' + (j.error || r.status);
@@ -394,7 +394,7 @@ async function copyModel(){
   const dst = document.getElementById('cp-dst').value.trim();
   if (!src || !dst) return;
   try{
-    const r = await fetch('/api/models/copy', {method:'POST', headers:{'Content-Type':'application/json'},
+    const r = await authFetch('/api/models/copy', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({source: src, destination: dst})});
     const j = await r.json();
     setText('cp-msg', j.ok ? 'copied ✓' : 'error: ' + (j.error || r.status));
@@ -406,7 +406,7 @@ async function showModel(){
   if (!m) return;
   document.getElementById('show-pre').textContent = 'loading…';
   try{
-    const r = await fetch('/api/models/show', {method:'POST', headers:{'Content-Type':'application/json'},
+    const r = await authFetch('/api/models/show', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({model: m})});
     const j = await r.json();
     document.getElementById('show-pre').textContent = JSON.stringify(j.detail ?? j, null, 2).slice(0, 8000);
@@ -428,7 +428,7 @@ async function createModel(){
   if (desc) payload.description = desc;
   setText('cr-msg', 'creating…');
   try{
-    const r = await fetch('/api/models/create', {method:'POST', headers:{'Content-Type':'application/json'},
+    const r = await authFetch('/api/models/create', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(payload)});
     const j = await r.json();
     setText('cr-msg', j.ok ? name + ' created ✓' : 'error: ' + (j.error || r.status));
@@ -449,7 +449,7 @@ function mcpSnippet(addr){
 
 async function refreshMcp(){
   try{
-    const r = await fetch('/api/mcp/status');
+    const r = await authFetch('/api/mcp/status');
     const j = await r.json();
     const el = document.getElementById('mcp-info');
     el.innerHTML = (j.running ? '<span class="badge ok">● running</span>' : '<span class="badge bad">● stopped</span>')
@@ -467,7 +467,7 @@ async function mcpStart(){
   const msg = document.getElementById('mcp-msg');
   msg.textContent = 'starting…';
   try{
-    const r = await fetch('/api/mcp/start', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    const r = await authFetch('/api/mcp/start', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
     const j = await r.json();
     msg.textContent = j.ok ? 'MCP running ✓' : 'error: ' + (j.error || r.status);
     refreshMcp(); checkHealth();
@@ -477,7 +477,7 @@ async function mcpStop(){
   const msg = document.getElementById('mcp-msg');
   msg.textContent = 'stopping…';
   try{
-    const r = await fetch('/api/mcp/stop', {method:'POST'});
+    const r = await authFetch('/api/mcp/stop', {method:'POST'});
     const j = await r.json();
     msg.textContent = j.ok ? 'MCP stopped ✓' : 'error: ' + JSON.stringify(j).slice(0,200);
     refreshMcp(); checkHealth();
@@ -485,7 +485,7 @@ async function mcpStop(){
 }
 async function mcpHealth(){
   try{
-    const r = await fetch('/api/mcp/health');
+    const r = await authFetch('/api/mcp/health');
     const j = await r.json();
     document.getElementById('mcp-msg').textContent =
       (j.ok ? 'probe ✓ ' : 'probe ✗ ') + fmtMs(j.latency_ms) + ' · ' + (j.detail || '');
@@ -512,7 +512,7 @@ async function mcpCall(){
   catch(e){ showErr('mcp-call-err', 'args is not valid JSON: ' + e.message); return; }
   document.getElementById('mcp-raw').textContent = 'calling…';
   try{
-    const r = await fetch('/api/mcp/call', {method:'POST', headers:{'Content-Type':'application/json'},
+    const r = await authFetch('/api/mcp/call', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({tool, args})});
     const j = await r.json();
     if (!j.ok){ showErr('mcp-call-err', j.error || ('HTTP ' + r.status)); return; }
@@ -541,7 +541,7 @@ async function mcpCall(){
 
 async function mcpResources(){
   try{
-    const r = await fetch('/api/mcp/resources');
+    const r = await authFetch('/api/mcp/resources');
     const j = await r.json();
     const sel = document.getElementById('mcp-res');
     const res = j.resources || [];
@@ -554,7 +554,7 @@ async function mcpRead(){
   if (!uri) return;
   document.getElementById('mcp-res-pre').textContent = 'reading…';
   try{
-    const r = await fetch('/api/mcp/read', {method:'POST', headers:{'Content-Type':'application/json'},
+    const r = await authFetch('/api/mcp/read', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({uri})});
     const j = await r.json();
     let txt = JSON.stringify(j, null, 2);
@@ -600,7 +600,7 @@ async function refreshMe(){
 }
 
 async function logout(){
-  try{ await fetch('/api/auth/logout', {method: 'POST'}); }catch(e){}
+  try{ await authFetch('/api/auth/logout', {method: 'POST'}); }catch(e){}
   location.href = '/login';
 }
 
@@ -749,7 +749,7 @@ async function deleteUser(){
 
 async function checkBootstrap(){
   try{
-    const r = await fetch('/api/auth/status');
+    const r = await authFetch('/api/auth/status');
     const j = await r.json();
     if (j.bootstrap_default && j.user && j.user.username === 'admin')
       document.getElementById('bootstrap-warn').classList.remove('hidden');
@@ -762,7 +762,7 @@ async function checkHealth(){
   const b = document.getElementById('health-badge');
   b.textContent = 'checking…'; b.className = 'badge';
   try{
-    const r = await fetch('/api/health');
+    const r = await authFetch('/api/health');
     const j = await r.json();
     const o = j.ollaya || {};
     b.textContent = o.ok ? '● Ollaya ' + (o.version || 'up') : '● Ollaya down';
@@ -781,7 +781,7 @@ async function checkHealth(){
 
 async function loadSettings(){
   try{
-    const r = await fetch('/api/settings');
+    const r = await authFetch('/api/settings');
     const j = await r.json();
     document.getElementById('ollaya-url').value = j.ollaya_base_url || '';
     document.getElementById('mcp-addr').value = j.mcp_addr || '';
@@ -803,7 +803,7 @@ async function saveSettings(){
     };
     const key = document.getElementById('api-key').value;
     if (key) payload.ollaya_api_key = key;
-    const r = await fetch('/api/settings', {
+    const r = await authFetch('/api/settings', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload)
     });
@@ -815,7 +815,7 @@ async function saveSettings(){
 
 async function loadMetrics(){
   try{
-    const r = await fetch('/api/metrics');
+    const r = await authFetch('/api/metrics');
     const j = await r.json();
     const t = j.totals || {};
     setText('m-req', t.requests ?? '—');
@@ -881,7 +881,7 @@ function summarize(respEx){
 
 async function loadHistory(){
   try{
-    const r = await fetch('/api/history?limit=40');
+    const r = await authFetch('/api/history?limit=40');
     const j = await r.json();
     const hb = document.getElementById('hist-body');
     const rows = j.history || [];
@@ -898,7 +898,7 @@ async function loadHistory(){
 
 async function showDetail(id){
   try{
-    const r = await fetch('/api/history/' + id);
+    const r = await authFetch('/api/history/' + id);
     const j = await r.json();
     showTab('decide');
     if (j.model && [...document.getElementById('model').options].some(o=>o.value===j.model))
@@ -933,7 +933,7 @@ async function showDetail(id){
 
 async function clearHistory(){
   if (!confirm('Delete all logged requests?')) return;
-  await fetch('/api/history', {method: 'DELETE'});
+  await authFetch('/api/history', {method: 'DELETE'});
   refreshAll(false);
 }
 
