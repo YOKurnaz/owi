@@ -23,6 +23,7 @@ function showTab(name){
   if (name==='api'){ apiInit(); }
   if (name==='models'){ refreshModels(); refreshRunning(); }
   if (name==='mcp'){ refreshMcp(); }
+  if (name==='mcp'){ refreshRemote(); }
   if (name==='perf'||name==='log'){ refreshAll(false); }
   if (name==='audit'){ refreshAudit(); refreshAuditStats(); }
   if (name==='audit'){ loadRetention(); }
@@ -1014,6 +1015,91 @@ async function clearAudit(){
     await authFetch('/api/audit', {method: 'DELETE'});
     refreshAudit(); refreshAuditStats();
   }catch(e){}
+}
+
+
+/* ---------- remote host (SSH key, admin) ---------- */
+
+async function refreshRemote(){
+  try{
+    const r = await authFetch('/api/remote/status');
+    const j = await r.json();
+    const el = document.getElementById('remote-info');
+    if (!j.enabled){
+      el.innerHTML = '<span class="badge">disabled</span> <span class="muted">'
+        + (j.paramiko ? 'enter host + user above (key auth, no password stored)' : 'paramiko missing: pip install paramiko') + '</span>';
+    } else {
+      const m = j.mcp || {};
+      el.innerHTML = (m.running ? '<span class="badge ok">● remote MCP up</span>' : '<span class="badge bad">● remote MCP down</span>')
+        + ' <span class="muted">' + esc(j.user || '') + '@' + esc(j.host || '') + '</span>'
+        + (m.processes ? '<div class="conf">' + esc(m.processes.slice(0, 200)) + '</div>' : '')
+        + (m.error ? '<div class="conf">ssh: ' + esc(m.error) + '</div>' : '');
+    }
+    if (!document.getElementById('remote-host').value) document.getElementById('remote-host').value = j.host || '';
+    if (!document.getElementById('remote-user').value) document.getElementById('remote-user').value = j.user || '';
+    const rk = document.getElementById('remote-key');
+    if (rk && !rk.value && j.key_path) rk.placeholder = j.key_path;
+    const sel = document.getElementById('remote-preset');
+    if (sel && !sel.options.length && j.presets)
+      sel.innerHTML = j.presets.map(x=>'<option>'+esc(x)+'</option>').join('');
+  }catch(e){}
+}
+
+async function saveRemote(){
+  const msg = document.getElementById('remote-msg');
+  msg.textContent = 'saving…';
+  try{
+    const payload = {
+      remote_host: document.getElementById('remote-host').value.trim(),
+      remote_user: document.getElementById('remote-user').value.trim(),
+      remote_key_path: document.getElementById('remote-key').value.trim()
+    };
+    const r = await authFetch('/api/settings', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+    const j = await r.json();
+    msg.textContent = j.ok ? 'saved ✓ ' + ((j.remote || {}).enabled ? 'enabled' : 'disabled') : 'error: ' + (j.error || r.status);
+    refreshRemote();
+  }catch(e){ msg.textContent = 'error: ' + e.message; }
+}
+
+async function testRemote(){
+  const msg = document.getElementById('remote-msg');
+  msg.textContent = 'testing…';
+  try{
+    const r = await authFetch('/api/remote/test', {method: 'POST'});
+    const j = await r.json();
+    msg.textContent = j.ok ? 'SSH ok ✓' : 'error: ' + (j.error || r.status);
+    document.getElementById('remote-out').textContent =
+      ((j.stdout || '') + (j.stderr ? '\nSTDERR:\n' + j.stderr : '')).slice(0, 4000) || JSON.stringify(j).slice(0, 1000);
+    refreshRemote();
+  }catch(e){ msg.textContent = 'error: ' + e.message; }
+}
+
+async function clearRemote(){
+  if (!confirm('Disable remote host?')) return;
+  try{
+    await authFetch('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({remote_host: '', remote_user: ''})});
+    document.getElementById('remote-host').value = '';
+    document.getElementById('remote-user').value = '';
+    document.getElementById('remote-msg').textContent = 'disabled ✓';
+    refreshRemote();
+  }catch(e){}
+}
+
+async function remoteExec(){
+  const preset = document.getElementById('remote-preset').value;
+  if (!preset) return;
+  document.getElementById('remote-out').textContent = 'running…';
+  try{
+    const r = await authFetch('/api/remote/exec', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({preset})});
+    const j = await r.json();
+    document.getElementById('remote-out').textContent =
+      ((j.stdout || '') + (j.stderr ? '\nSTDERR:\n' + j.stderr : '')).slice(0, 6000)
+      || JSON.stringify(j, null, 2).slice(0, 2000);
+    refreshRemote();
+  }catch(e){ document.getElementById('remote-out').textContent = 'error: ' + e.message; }
 }
 
 /* ---------- health/settings/metrics/history ---------- */

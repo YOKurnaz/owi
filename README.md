@@ -29,7 +29,9 @@ and its **MCP server** (`ollaya mcp --http`).
   create (Modelfile-style), load / unload, default-model keep-alive policy
   (default stays loaded, others unload; max-N-loaded enforcement, GPU-OOM
   CPU fallback).
-- **MCP control** — start/stop `ollaya mcp --http`, probe health, call tools
+- **MCP control** — start/stop `ollaya mcp --http` locally, or manage a
+  remote Ollaya host over SSH (key auth, allowlisted commands),
+  probe health, call tools
   (`decide`, `list_models`, `show_model`, `pull_model`), read resources
   (`ollaya://models`, `ollaya://presets/*`), client config snippets.
 - **Users & security** — session login for the UI, bearer API keys for
@@ -53,6 +55,10 @@ Decide tab (above) plus the other main views:
 ### Performance — per-model / per-preset / per-day, health history
 
 ![OWI — Performance tab: metrics and health history](docs/tab-performance.png)
+
+### MCP — local server, remote host, tool calls
+
+![OWI — MCP tab: remote host over SSH, tool calls](docs/tab-mcp.png)
 
 ### Request log — search, filters, retention
 
@@ -205,8 +211,13 @@ Notes:
 - If Ollaya needs a key (`OLLAYA_API_KEY` set server-side), pass the same
   value as `-e OLLAYA_API_KEY=...` or save it in the UI header.
 - MCP start/stop from the UI only works in bare-metal mode (the container
-  has no `ollaya` binary). Point `OLLAYA_MCP_ADDR` at a host MCP server
-  that is already listening, or leave MCP stopped.
+  has no `ollaya` binary). Two alternatives: point `OLLAYA_MCP_ADDR` at a
+  host MCP server that is already listening — or configure a **Remote host**
+  (MCP tab, admin): host + user + SSH key path, then Test SSH and run
+  allowlisted presets (`mcp status/start/stop/log`, `ollaya status/ps`,
+  `gpu`). Key auth only, no password stored. Compose vars:
+  `OWI_REMOTE_HOST` / `OWI_REMOTE_USER` / `OWI_REMOTE_KEY`
+  (+ mount the key into the container, see `compose.yaml`).
 - SQLite db, request log and saved settings live in `./data` (a volume),
   so `docker compose pull && docker compose up -d --build` keeps everything.
 - Health: the image probes `GET /login` (public); all `/api/*` need login.

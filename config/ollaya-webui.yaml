@@ -16,3 +16,8 @@ log_retention_days: 30
 log_retention_max_rows: 10000
 audit_retention_days: 90
 audit_retention_max_rows: 20000
+# Remote Ollaya host over SSH (key auth only, no password stored).
+# UI settings (sqlite) > OWI_REMOTE_HOST / OWI_REMOTE_USER / OWI_REMOTE_KEY env > this file.
+# remote_host: 192.168.50.57
+# remote_user: tarcin
+# remote_key_path: ~/.ssh/id_ed25519

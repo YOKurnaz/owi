@@ -19,6 +19,10 @@ from datetime import datetime, timezone
 
 import requests
 import yaml
+try:
+    import paramiko
+except Exception:
+    paramiko = None
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -189,6 +193,36 @@ def api_key():
     if db_val:
         return db_val
     return os.environ.get("OLLAYA_API_KEY", "").strip()
+
+
+def _cfg_str(db_key, env_key, yaml_key, default=""):
+    db_val = get_setting(db_key, None)
+    if db_val is not None and str(db_val).strip():
+        return str(db_val).strip()
+    env_val = os.environ.get(env_key, "").strip()
+    if env_val:
+        return env_val
+    cfg = load_yaml_config()
+    if isinstance(cfg.get(yaml_key), str) and cfg[yaml_key].strip():
+        return cfg[yaml_key].strip()
+    return default
+
+
+def remote_host():
+    return _cfg_str("remote_host", "OWI_REMOTE_HOST", "remote_host", "")
+
+
+def remote_user():
+    return _cfg_str("remote_user", "OWI_REMOTE_USER", "remote_user", "")
+
+
+def remote_key_path():
+    return _cfg_str("remote_key_path", "OWI_REMOTE_KEY", "remote_key_path",
+                    os.path.expanduser("~/.ssh/id_ed25519"))
+
+
+def remote_enabled():
+    return bool(remote_host() and remote_user())
 
 
 def default_model():
@@ -828,6 +862,49 @@ _mcp_lock = threading.Lock()
 _mcp_session = {"id": None}
 
 
+def ssh_exec(command, timeout=30):
+    if paramiko is None:
+        return {"ok": False, "error": "paramiko not installed (pip install paramiko)"}
+    if not remote_enabled():
+        return {"ok": False, "error": "remote host not configured (set host + user first)"}
+    key = os.path.expanduser(remote_key_path())
+    if not os.path.exists(key):
+        return {"ok": False, "error": f"SSH key not found: {key}"}
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        client.connect(remote_host(), username=remote_user(),
+                       key_filename=key, timeout=10,
+                       banner_timeout=10, auth_timeout=10)
+        _, stdout, stderr = client.exec_command(command, timeout=timeout)
+        rc = stdout.channel.recv_exit_status()
+        out = (stdout.read() or b"").decode("utf-8", "replace")[:6000]
+        err = (stderr.read() or b"").decode("utf-8", "replace")[:2000]
+        return {"ok": rc == 0, "rc": rc, "stdout": out, "stderr": err,
+                "error": None if rc == 0 else (err or out or f"exit {rc}")[:500]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:500]}
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
+def remote_mcp_state():
+    if not remote_enabled():
+        return {"ok": False, "enabled": False,
+                "error": "remote host not configured"}
+    r = ssh_exec("pgrep -af '[o]llaya mcp --http' || echo NO_MCP", timeout=15)
+    if not r["ok"] and "NO_MCP" not in (r.get("stdout") or ""):
+        return {"ok": False, "enabled": True, "error": r.get("error")}
+    procs = (r.get("stdout") or "").strip()
+    running = bool(procs and "NO_MCP" not in procs)
+    return {"ok": True, "enabled": True, "running": running,
+            "host": remote_host(), "user": remote_user(),
+            "processes": procs[:1000] if running else ""}
+
+
 def _mcp_url():
     return f"http://{mcp_addr()}/mcp"
 
@@ -1195,6 +1272,15 @@ ROUTE_MAP = [
      "auth": "login"},
     {"method": "POST", "path": "/api/mcp/read", "doc": "read an mcp resource",
      "auth": "login", "example": {"uri": "ollaya://presets/triage"}},
+    {"method": "GET", "path": "/api/remote/status",
+     "doc": "remote Ollaya host config + remote MCP state (SSH key auth)",
+     "auth": "login"},
+    {"method": "POST", "path": "/api/remote/test",
+     "doc": "test SSH to remote host", "auth": "admin"},
+    {"method": "POST", "path": "/api/remote/exec",
+     "doc": "run an allowlisted preset on the remote host (mcp/ollaya/gpu)",
+     "auth": "admin", "example": {"preset": "mcp status"},
+     "params": {"preset": "mcp status|mcp start|mcp stop|mcp log|ollaya status|ollaya ps|gpu"}},
     {"method": "GET", "path": "/api/history", "doc": "logged requests (?limit,q,model,preset,user,status,days)",
      "auth": "login", "params": {"limit": "1-500", "q": "full-text search",
                 "model": "exact model", "preset": "exact preset",
@@ -1334,6 +1420,9 @@ def read_settings(req: Request):
     return {"ollaya_base_url": ollaya_base_url(), "mcp_addr": mcp_addr(),
             "has_api_key": bool(api_key()),
             "default_model": default_model(), "max_loaded_models": max_loaded_models(),
+            "remote": {"host": remote_host(), "user": remote_user(),
+                       "key_path": remote_key_path(), "enabled": remote_enabled(),
+                       "paramiko": paramiko is not None},
             "source": ("db" if get_setting("ollaya_base_url") else
                        ("env" if os.environ.get("OLLAYA_BASE_URL") else
                         ("yaml" if cfg.get("ollaya_base_url") else "default"))),
@@ -1439,6 +1528,18 @@ async def write_settings(req: Request):
                 out["enforce_unloaded"] = await asyncio.to_thread(enforce_loaded_limit)
         except Exception:
             return JSONResponse({"ok": False, "error": "max_loaded_models must be an integer >= 1"}, status_code=400)
+    if "remote_host" in body or "remote_user" in body or "remote_key_path" in body:
+        rh = str(body.get("remote_host", remote_host()) or "").strip()
+        ru = str(body.get("remote_user", remote_user()) or "").strip()
+        rk = str(body.get("remote_key_path", remote_key_path()) or "").strip()
+        if (rh or ru) and not (rh and ru):
+            return JSONResponse({"ok": False, "error": "remote_host and remote_user are required together (empty both to disable)"}, status_code=400)
+        set_setting("remote_host", rh)
+        set_setting("remote_user", ru)
+        if rk:
+            set_setting("remote_key_path", rk)
+        out["remote"] = {"host": rh, "user": ru, "key_path": remote_key_path(),
+                         "enabled": bool(rh and ru)}
     h = check_ollaya()
     record_health("ollaya_health", h["ok"], h["latency_ms"], h["status_code"], h["detail"])
     out.update({"ok": True, "ollaya": h})
@@ -2030,6 +2131,63 @@ async def mcp_stop_api(req: Request):
     res = await asyncio.to_thread(mcp_stop)
     code = 200 if res.get("ok") else 502
     return JSONResponse(res, status_code=code)
+
+
+# ---------------- API: remote host (admin only) ----------------
+
+REMOTE_ALLOWED = {
+    "mcp status": "pgrep -af '[o]llaya mcp --http' || echo NO_MCP",
+    "mcp start": "nohup ollaya mcp --http 127.0.0.1:11436 >/tmp/owi-mcp.log 2>&1 & sleep 2; pgrep -af '[o]llaya mcp --http' || tail -n 20 /tmp/owi-mcp.log",
+    "mcp stop": "pkill -f '[o]llaya mcp --http'; sleep 1; pgrep -af '[o]llaya mcp' || echo STOPPED",
+    "mcp log": "tail -n 50 /tmp/owi-mcp.log 2>/dev/null || journalctl --user -u ollaya-mcp --no-pager -n 50 2>/dev/null || echo 'no mcp log found'",
+    "ollaya status": "systemctl --user is-active ollaya 2>/dev/null; curl -s -m 5 http://127.0.0.1:11435/api/version || curl -s -m 5 http://127.0.0.1:11435/",
+    "ollaya ps": "curl -s -m 10 http://127.0.0.1:11435/api/ps | head -c 2000",
+    "gpu": "nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv 2>/dev/null || lspci 2>/dev/null | grep -i -E 'vga|3d' | head -n 5",
+}
+
+
+@app.get("/api/remote/status")
+def remote_status(req: Request):
+    redir, a = need_login(req)
+    if redir is not None:
+        return redir
+    out = {"ok": True, "enabled": remote_enabled(), "host": remote_host(),
+           "user": remote_user(), "key_path": remote_key_path(),
+           "paramiko": paramiko is not None, "presets": sorted(REMOTE_ALLOWED)}
+    if remote_enabled():
+        out["mcp"] = remote_mcp_state()
+    return out
+
+
+@app.post("/api/remote/test")
+async def remote_test(req: Request):
+    redir, a = need_admin(req)
+    if redir is not None:
+        return redir
+    res = await asyncio.to_thread(ssh_exec, "echo OWI_OK; hostname; ollaya -v 2>&1 | head -n 1", 20)
+    res["ok"] = bool(res.get("ok"))
+    res["enabled"] = remote_enabled()
+    code = 200 if res.get("ok") else 502
+    return JSONResponse(res, status_code=code)
+
+
+@app.post("/api/remote/exec")
+async def remote_exec(req: Request):
+    redir, a = need_admin(req)
+    if redir is not None:
+        return redir
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid JSON"}, status_code=400)
+    preset = str((body or {}).get("preset") or "").strip()
+    if preset not in REMOTE_ALLOWED:
+        return JSONResponse({"ok": False, "error": "unknown preset",
+                             "presets": sorted(REMOTE_ALLOWED)}, status_code=400)
+    res = await asyncio.to_thread(ssh_exec, REMOTE_ALLOWED[preset], 60)
+    code = 200 if res.get("ok") else 502
+    return JSONResponse({"ok": res.get("ok", False), "preset": preset, **res},
+                        status_code=code)
 
 
 @app.get("/api/mcp/health")

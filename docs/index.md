@@ -16,8 +16,8 @@ and its **MCP server** (`ollaya mcp --http`).
   questions; answers with probabilities, load/eval timings, routing info.
 - **Model manager** — list local + loaded models, pull / delete / copy /
   create (Modelfile-style), load / unload, default-model keep-alive policy.
-- **MCP control** — start/stop `ollaya mcp --http`, probe health, call tools,
-  read resources, client config snippets.
+- **MCP control** — local start/stop plus remote-host management over
+  SSH (key auth), tool calls, resources, client config snippets.
 - **Users & security** — session login for the UI, bearer API keys for
   scripts, `admin` / `user` roles; per-user history and metrics scoping.
 - **Performance & log** — totals, p50/p95, per-model/per-preset/per-day,

@@ -186,6 +186,24 @@
       <button onclick="mcpHealth()">Probe</button>
     </div>
     <div id="mcp-msg" class="muted"></div>
+    <h3>Remote host <span class="sub">SSH key auth · admin · for docker installs (no local ollaya binary)</span></h3>
+    <div id="remote-info" class="muted">Loading…</div>
+    <div class="row" style="margin-top:8px">
+      <input id="remote-host" spellcheck="false" placeholder="host (IP or name)"/>
+      <input id="remote-user" spellcheck="false" placeholder="user" style="max-width:130px"/>
+      <input id="remote-key" spellcheck="false" placeholder="key path (~/.ssh/id_ed25519)" style="min-width:200px"/>
+    </div>
+    <div class="row">
+      <button onclick="saveRemote()">Save</button>
+      <button onclick="testRemote()">Test SSH</button>
+      <button class="danger" onclick="clearRemote()">Disable</button>
+      <span id="remote-msg" class="muted"></span>
+    </div>
+    <div class="row">
+      <select id="remote-preset" style="max-width:220px"></select>
+      <button class="primary" onclick="remoteExec()">▶ Run</button>
+    </div>
+    <pre id="remote-out" class="out">—</pre>
     <h3>Config for agents <span class="sub">copy into your MCP client</span></h3>
     <pre id="mcp-snippet" class="out">—</pre>
   </div>

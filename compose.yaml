@@ -18,6 +18,12 @@ services:
       # mode). Point at a host MCP address only if one is already listening.
       - OLLAYA_MCP_ADDR=host.docker.internal:11436
       - OWI_TIMEOUT_S=300
+      # Remote Ollaya host over SSH (key auth, admin sets host/user in UI too):
+      # - OWI_REMOTE_HOST=192.168.50.57
+      # - OWI_REMOTE_USER=tarcin
+      # - OWI_REMOTE_KEY=/root/.ssh/id_ed25519
+      # Mount a key if the container must SSH out, e.g.:
+      # - ~/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
     volumes:
       # State (sqlite db, logs) + fallback config live OUTSIDE the image,
       # so rebuilds/upgrades keep everything. Code (incl. src/static UI)
