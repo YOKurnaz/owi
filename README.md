@@ -27,8 +27,9 @@ and its **MCP server** (`ollaya mcp --http`).
   questions; answers with probabilities, load/eval timings, routing info.
 - **Model manager** — list local + loaded models, pull / delete / copy /
   create (Modelfile-style), load / unload, default-model keep-alive policy
-  (default stays loaded, others unload; max-N-loaded enforcement, GPU-OOM
-  CPU fallback).
+  (default stays loaded; others get a sliding 10m idle window refreshed by
+  every request and unload only when idle; max-N-loaded enforcement,
+  GPU-OOM CPU fallback).
 - **MCP control** — start/stop `ollaya mcp --http` locally, or manage a
   remote Ollaya host over SSH (key auth, allowlisted commands),
   probe health, call tools
@@ -237,6 +238,7 @@ yaml file, yaml over built-ins:
 | MCP address | `OLLAYA_MCP_ADDR` | `mcp_addr` | `127.0.0.1:11436` |
 | Default model | `OWI_DEFAULT_MODEL` | `default_model` | `laya:latest` |
 | Max loaded | `OWI_MAX_LOADED_MODELS` | `max_loaded_models` | `2` |
+| Idle window (non-default) | `OWI_IDLE_KEEP_ALIVE` | `idle_keep_alive` | `10m` |
 | Listen port | `OWI_PORT` | — | `11524` |
 | Config path | `OWI_CONFIG` | — | `config/ollaya-webui.yaml` |
 | DB path | `OWI_DB` | — | `data/owi.db` |

@@ -30,7 +30,7 @@
   <label>API key <input id="api-key" class="short" type="password" spellcheck="false" placeholder="(none)"/></label>
   <button onclick="saveSettings()">Save</button>
   <span id="settings-msg" class="muted"></span>
-  <span class="muted right">default <code id="policy-default">…</code> · max <code id="policy-max">…</code> · OWI :11524 · <a href="/api/policy" target="_blank">/api/policy</a></span>
+  <span class="muted right">default <code id="policy-default">…</code> · max <code id="policy-max">…</code> · idle <code id="policy-idle">…</code> · OWI :11524 · <a href="/api/policy" target="_blank">/api/policy</a></span>
 </section>
 
 <nav class="tabs" id="tabs">
@@ -71,9 +71,9 @@
         <option value="agent">agent</option>
         <option value="custom">custom (blank)</option>
       </select>
-      <select id="keepalive" title="keep_alive — auto follows policy: default model stays loaded, others unload">
+      <select id="keepalive" title="keep_alive — auto: default model stays loaded, others idle 10m sliding">
         <option value="">keepalive: auto (policy)</option>
-        <option value="0">keepalive: unload after</option>
+        <option value="0">keepalive: unload after this call</option>
         <option value="10m">keepalive: 10m</option>
         <option value="-1">keepalive: forever</option>
         <option value="default">keepalive: ollaya default (5m)</option>
@@ -136,15 +136,16 @@
     </div>
   </div>
   <div class="panel">
-    <h2>Loaded in memory <span class="sub">GET /api/ps · policy: default <code id="running-default">…</code>, max <code id="running-max">…</code></span> <button onclick="refreshRunning()">⟳ Reload</button></h2>
+    <h2>Loaded in memory <span class="sub">GET /api/ps · policy: default <code id="running-default">…</code>, max <code id="running-max">…</code>, idle <code id="running-idle">…</code></span> <button onclick="refreshRunning()">⟳ Reload</button></h2>
     <div class="table-wrap"><table>
       <thead><tr><th>Name</th><th>Device</th><th>Mem</th><th>Expires</th><th></th></tr></thead>
       <tbody id="running-body"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
     </table></div>
-    <h3>Default model <span class="sub">always kept loaded · at most N loaded total</span></h3>
+    <h3>Default model <span class="sub">always kept loaded · others idle-unload · at most N loaded total</span></h3>
     <div class="row">
       <select id="default-model" title="default model"></select>
       <input id="max-loaded" spellcheck="false" placeholder="max (e.g. 2)" style="max-width:110px"/>
+      <input id="idle-keep" spellcheck="false" placeholder="idle (e.g. 10m)" style="max-width:130px" title="idle window for non-default models"/>
       <button class="primary" onclick="savePolicy()">Set default</button>
       <button onclick="ensureDefault()">⬆ Ensure loaded</button>
       <button onclick="enforcePolicy()">Enforce max</button>

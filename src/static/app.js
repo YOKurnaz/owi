@@ -2,6 +2,7 @@ let MODELS = [];
 let CURRENT_TAB = 'decide';
 let DEFAULT_MODEL = 'laya:latest';
 let MAX_LOADED = 2;
+let IDLE_KEEP = '10m';
 
 const PRESET_FALLBACK_STATES = {
   triage: {message: "You charged me twice, I want my money back NOW, this is urgent!"},
@@ -110,7 +111,7 @@ function updateKaHint(){
   const hint = document.getElementById('ka-hint');
   if (!hint) return;
   if (!m){ hint.textContent = ''; return; }
-  hint.textContent = isDefaultModel(m) ? 'auto → stays loaded (default)' : 'auto → unload after';
+  hint.textContent = isDefaultModel(m) ? 'auto → stays loaded (default)' : 'auto → idle ' + IDLE_KEEP + ' (sliding)';
 }
 
 async function loadPolicy(){
@@ -119,16 +120,21 @@ async function loadPolicy(){
     const j = await r.json();
     if (j.default_model) DEFAULT_MODEL = j.default_model;
     if (j.max_loaded_models) MAX_LOADED = j.max_loaded_models;
+    if (j.idle_keep_alive) IDLE_KEEP = j.idle_keep_alive;
     setText('policy-default', DEFAULT_MODEL);
     setText('policy-max', MAX_LOADED);
+    setText('policy-idle', IDLE_KEEP);
     setText('running-default', DEFAULT_MODEL);
     setText('running-max', MAX_LOADED);
+    setText('running-idle', IDLE_KEEP);
     const dm = document.getElementById('default-model');
     if (dm && MODELS.length){
       dm.innerHTML = MODELS.map(n=>'<option value="'+esc(n)+'"'+(normName(n).toLowerCase()===normName(DEFAULT_MODEL).toLowerCase()?' selected':'')+'>'+esc(n)+(normName(n).toLowerCase()===normName(DEFAULT_MODEL).toLowerCase()?' ★':'')+'</option>').join('');
     }
     const mx = document.getElementById('max-loaded');
     if (mx && !mx.value) mx.placeholder = 'max (' + MAX_LOADED + ')';
+    const ik = document.getElementById('idle-keep');
+    if (ik && !ik.value) ik.placeholder = 'idle (' + IDLE_KEEP + ')';
     updateKaHint();
   }catch(e){}
 }
@@ -139,6 +145,8 @@ async function savePolicy(){
   const payload = {};
   if (dm) payload.default_model = dm;
   if (mx) payload.max_loaded_models = Number(mx);
+  const ikv = document.getElementById('idle-keep').value.trim();
+  if (ikv) payload.idle_keep_alive = ikv;
   setText('policy-msg', 'saving…');
   try{
     const r = await authFetch('/api/policy', {method:'POST', headers:{'Content-Type':'application/json'},
@@ -283,6 +291,7 @@ async function refreshModels(){
     const j = await r.json();
     if (j.default_model) DEFAULT_MODEL = j.default_model;
     if (j.max_loaded_models) MAX_LOADED = j.max_loaded_models;
+    if (j.idle_keep_alive) IDLE_KEEP = j.idle_keep_alive;
     MODELS = (j.models || []).map(m=>m.name);
     const sel = document.getElementById('model');
     const prev = sel.value;
@@ -335,8 +344,11 @@ async function refreshRunning(){
     const j = await r.json();
     if (j.default_model) DEFAULT_MODEL = j.default_model;
     if (j.max_loaded_models) MAX_LOADED = j.max_loaded_models;
+    if (j.idle_keep_alive) IDLE_KEEP = j.idle_keep_alive;
     setText('running-default', DEFAULT_MODEL);
     setText('running-max', MAX_LOADED);
+    setText('running-idle', IDLE_KEEP);
+    updateKaHint();
     const tb = document.getElementById('running-body');
     const rows = j.models || [];
     tb.innerHTML = rows.length ? rows.map(m=>
@@ -1133,8 +1145,10 @@ async function loadSettings(){
     document.getElementById('mcp-addr').value = j.mcp_addr || '';
     if (j.default_model) DEFAULT_MODEL = j.default_model;
     if (j.max_loaded_models) MAX_LOADED = j.max_loaded_models;
+    if (j.idle_keep_alive) IDLE_KEEP = j.idle_keep_alive;
     setText('policy-default', DEFAULT_MODEL);
     setText('policy-max', MAX_LOADED);
+    setText('policy-idle', IDLE_KEEP);
     setText('foot-ollaya', j.ollaya_base_url || '');
     setText('foot-mcp', j.mcp_addr || '');
   }catch(e){}

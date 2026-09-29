@@ -7,6 +7,9 @@ mcp_addr: 127.0.0.1:11436
 default_model: laya:latest
 # Max models loaded at once (default model is never evicted).
 max_loaded_models: 2
+# Idle window for non-default models: each request refreshes it; the model
+# unloads only after this long with no requests. Default model stays forever.
+idle_keep_alive: 10m
 # Background Ollaya health probe interval (seconds, 20-600).
 health_interval_s: 60
 # Retention: rows older than N days are pruned (0 = keep forever),

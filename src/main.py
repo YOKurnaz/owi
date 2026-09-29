@@ -251,6 +251,22 @@ def max_loaded_models():
     return FALLBACK_MAX_LOADED
 
 
+FALLBACK_IDLE_KEEP_ALIVE = "10m"
+
+
+def idle_keep_alive():
+    for raw in (get_setting("idle_keep_alive", None),
+                os.environ.get("OWI_IDLE_KEEP_ALIVE", ""),
+                str((load_yaml_config().get("idle_keep_alive") or ""))):
+        try:
+            v = str(raw or "").strip()
+            if v:
+                return v
+        except Exception:
+            continue
+    return FALLBACK_IDLE_KEEP_ALIVE
+
+
 FALLBACK_RETENTION_DAYS = 30
 FALLBACK_RETENTION_MAX_ROWS = 10000
 
@@ -400,7 +416,9 @@ def is_default_loaded(loaded):
 def policy_keepalive(model, explicit):
     if explicit is not None:
         return explicit
-    return -1 if is_default_model(model) else 0
+    if is_default_model(model):
+        return -1
+    return idle_keep_alive()
 
 
 SESSION_COOKIE = "owi_session"
@@ -1207,7 +1225,8 @@ ROUTE_MAP = [
      "auth": "login"},
     {"method": "POST", "path": "/api/policy",
      "doc": "set policy (+ensure default loaded)", "auth": "admin",
-     "example": {"default_model": "laya:latest", "max_loaded_models": 2}},
+     "example": {"default_model": "laya:latest", "max_loaded_models": 2,
+                 "idle_keep_alive": "10m"}},
     {"method": "GET", "path": "/api/version", "doc": "ollaya server version",
      "auth": "login"},
     {"method": "POST", "path": "/api/decide",
@@ -1439,11 +1458,12 @@ def read_policy(req: Request):
     dm = default_model()
     return {"ok": True, "default_model": dm, "default_targets": default_targets(),
             "max_loaded_models": max_loaded_models(),
+            "idle_keep_alive": idle_keep_alive(),
             "loaded": loaded, "loaded_count": len(loaded),
             "default_loaded": is_default_loaded(loaded),
             "rules": [
                 "default model (+ its router targets): keep_alive -1 (stay loaded); explicit keep_alive in a request still wins",
-                "any other model: keep_alive 0 (unload after use) unless the request says otherwise",
+                "any other model: sliding idle window (each request refreshes it); unloads only after idle_keep_alive of silence",
                 f"at most {max_loaded_models()} loaded (default set is never evicted)",
             ]}
 
@@ -1475,10 +1495,17 @@ async def write_policy(req: Request):
             return JSONResponse({"ok": False, "error": "max_loaded_models must be >= 1"}, status_code=400)
         set_setting("max_loaded_models", str(n))
         out["max_loaded_models"] = n
+    if "idle_keep_alive" in body:
+        v = str(body["idle_keep_alive"] or "").strip()
+        if not v:
+            return JSONResponse({"ok": False, "error": "idle_keep_alive must be non-empty"}, status_code=400)
+        set_setting("idle_keep_alive", v)
+        out["idle_keep_alive"] = v
     out["ensure"] = await asyncio.to_thread(ensure_default_loaded)
     out["enforce_unloaded"] = await asyncio.to_thread(enforce_loaded_limit)
     out.update({"ok": True, "policy": await asyncio.to_thread(
         lambda: {"default_model": default_model(), "max_loaded_models": max_loaded_models(),
+                 "idle_keep_alive": idle_keep_alive(),
                  "loaded": _loaded_names()})})
     return out
 
@@ -1528,6 +1555,11 @@ async def write_settings(req: Request):
                 out["enforce_unloaded"] = await asyncio.to_thread(enforce_loaded_limit)
         except Exception:
             return JSONResponse({"ok": False, "error": "max_loaded_models must be an integer >= 1"}, status_code=400)
+    if "idle_keep_alive" in body:
+        v = str(body["idle_keep_alive"] or "").strip()
+        if v:
+            set_setting("idle_keep_alive", v)
+            out["idle_keep_alive"] = v
     if "remote_host" in body or "remote_user" in body or "remote_key_path" in body:
         rh = str(body.get("remote_host", remote_host()) or "").strip()
         ru = str(body.get("remote_user", remote_user()) or "").strip()
@@ -1724,7 +1756,7 @@ def _do_decide(client_ip, username, model, state, questions, keep_alive, extras,
            "answered_on": devs.get(_norm_name(answered_by or model).lower(), "") if ok else "",
            "tokens_in": ti, "tokens_out": to,
            "keep_alive": effective_ka if policy else keep_alive,
-           "keep_alive_policy": ("default:keep" if is_default_model(model) else "default:unload")
+           "keep_alive_policy": ("default:keep" if is_default_model(model) else f"default:idle-{effective_ka}")
                                 if (policy and keep_alive is None) else "explicit",
            "enforce_unloaded": unloaded,
            "response": fwd["data"], "error": fwd["error"]}
